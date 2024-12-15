@@ -1,0 +1,26 @@
+name: text2video
+channels:
+    - pytorch
+    - nvidia
+    - defaults
+    - anaconda
+    - conda-forge
+dependencies:
+    - python=3.10
+    - tqdm
+    - nvidia/label/cuda-12.4.1::libnvjpeg
+    - conda-forge::openssl
+    - numpy=1.26.4
+    - pytorch=2.5.1
+    - torchvision
+    - torchtext
+    - pytorch-cuda=12.4
+    - pip
+    - chardet
+    - timm
+    - pyparsing
+    - pycocotools
+    - pandas
+    - pip:
+        - discord-webhook
+        - clean-fid
