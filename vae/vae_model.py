@@ -67,7 +67,7 @@ class Decoder(nn.Module):
 
         # Always make the last layer of decoder return an image-like structure
         layers.append(nn.ConvTranspose2d(in_channels, final_img_channels, kernel_size, stride, padding))
-        layers.append(nn.Sigmoid())  # Output between 0 and 1
+        layers.append(nn.Tanh())  # Output between -1 and 1
         self.deconv_layers = nn.Sequential(*layers)
 
     def forward(self, z):
