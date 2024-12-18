@@ -1,3 +1,8 @@
+"""
+Downloads the videos from the Vatex dataset and splits each video into separate images
+https://eric-xw.github.io/vatex-website/index.html
+"""
+
 import json
 import subprocess
 import os
