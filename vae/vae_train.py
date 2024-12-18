@@ -7,15 +7,18 @@ import torchvision.utils as vutils
 from torchvision.datasets import ImageFolder
 from torchvision.transforms import v2
 from tqdm import tqdm
+from utils import load_latest_checkpoint
 
 # Import the VAE model
 from vae_model import VAE
 
 # Constants
 IMG_SIZE = 256
-LATENT_DIM = 128
-WORKERS = 10
+LATENT_DIM = 200
+WORKERS = 12
 BATCH_SIZE = 16  # Adjust based on GPU memory
+DATASET_FRACTION = 0.05 # The percentage of the dataset to use
+CHANNEL_MULTIPLIER = 3
 
 def save_original_and_reconstructed(original_images, reconstructed_images, output_dir, filename='comparison.png', nrow = 8):
     if not os.path.exists(output_dir):
@@ -26,27 +29,6 @@ def save_original_and_reconstructed(original_images, reconstructed_images, outpu
 
     # Save the concatenated images
     vutils.save_image(comparison, os.path.join(output_dir, filename), nrow=nrow, normalize=True)
-
-def load_latest_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
-        return 0  # No checkpoints exist
-
-    # Find the latest checkpoint
-    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
-    if not checkpoints:
-        return 0  # No checkpoints available
-
-    latest_checkpoint = max(checkpoints, key=lambda f: int(f.split('_')[2].split('.')[0]))
-    checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
-
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    print(f"Loaded checkpoint '{latest_checkpoint}' (epoch {epoch})")
-    return epoch
 
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -83,9 +65,10 @@ dataset = ImageFolder(root=DATA_DIR, transform=transform)
 testset = ImageFolder(root=TEST_DIR, transform=transform)
 
 # Create subset of the data
-idxs = list(range(len(dataset)))
-shuffle(idxs)
-dataset = Subset(dataset, idxs[:int(len(dataset)*0.1)] )
+if DATASET_FRACTION < 1:
+    idxs = list(range(len(dataset)))
+    shuffle(idxs)
+    dataset = Subset(dataset, idxs[:int(len(dataset)*DATASET_FRACTION)] )
 
 
 # Add another dataset for more training data
@@ -106,14 +89,14 @@ dataloader = DataLoader(
 testloader = DataLoader(
     testset,
     batch_size=BATCH_SIZE,
-    shuffle=False,
+    shuffle=True,
     num_workers=WORKERS,
     pin_memory=True,
     drop_last=True,
 )
 
 # Initialize the VAE model
-model = VAE(img_size=IMG_SIZE, latent_dim=LATENT_DIM).to(device)
+model = VAE(img_size=IMG_SIZE, latent_dim=LATENT_DIM, multiplier=CHANNEL_MULTIPLIER).to(device)
 
 # Optimizer and loss function
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
@@ -129,39 +112,41 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
 start_epoch = load_latest_checkpoint(model, optimizer)
 
 # Loss function definition
-def loss_function(recon_x, x, mu, logvar):
-    # print(f"recon_x={recon_x.shape}, x={x.shape}")
+def loss_function(recon_x, x, mu, logvar, beta=1.0):
     recon_loss = reconstruction_loss_fn(recon_x, x)
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    total_loss = (recon_loss + kl_loss) / x.size(0)
+    total_loss = (recon_loss + beta * kl_loss) / x.size(0)
     return total_loss
 
 def validation(model, test_dataloader):
     model.eval()
     test_loss = 0
     with torch.no_grad():
-        for batch_idx, (data, _) in tqdm(
-            enumerate(test_dataloader),
+        progress_bar = tqdm(
+            test_dataloader,
             total=len(test_dataloader),
             leave=False,
             unit="batch",
             desc='Validation',
             smoothing=0.7,
-            ):
+        )
+        for batch_idx, (data, _) in enumerate(progress_bar):
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
             test_loss += loss_function(recon_batch, data, mu, logvar).item()
     test_loss /= len(test_dataloader)
-    return test_loss
+    last_data = data
+    return test_loss, last_data
 
 # TODO: Add to pickle
 randomized_vectors1 = torch.randn((4, LATENT_DIM)).to(device)
 randomized_vectors2 = torch.randn((4, LATENT_DIM)).to(device)
 
 standard_sample_data = None
+standard_val_data = None
 
 # Training loop
-EPOCHS = 200
+EPOCHS = 100
 for epoch in range(start_epoch + 1, EPOCHS + 1):
     model.train()
     train_loss = 0
@@ -185,7 +170,7 @@ for epoch in range(start_epoch + 1, EPOCHS + 1):
 
     progress_bar.close()
 
-    avg_loss = validation(model, testloader)
+    avg_loss, val_data = validation(model, testloader)
     scheduler.step(avg_loss)
     print(f'====> Epoch: {epoch} - Average loss: {avg_loss:.4f} - Learning rate: {optimizer.param_groups[0]["lr"]:.1e}')
 
@@ -202,16 +187,27 @@ for epoch in range(start_epoch + 1, EPOCHS + 1):
     with torch.no_grad():
         if standard_sample_data is None:
             standard_sample_data = data[:8].to(device)
+        if standard_val_data is None:
+            standard_val_data = val_data[:8].to(device)
         sample_data = standard_sample_data
         recon_data, _, _ = model(sample_data)
+        val_recon_data, _, _ = model(standard_val_data)
         # Code to save or display images
         # For example, using torchvision.utils.save_image()
         save_original_and_reconstructed(
-            inv_normalize(sample_data),
+            sample_data,
             recon_data,
-            'output_images',
+            'output_images/training',
             f'comparison{epoch:03d}.png',
             nrow=sample_data.shape[0]
+        )
+
+        save_original_and_reconstructed(
+            standard_val_data,
+            val_recon_data,
+            'output_images/validation',
+            f'comparison{epoch:03d}.png',
+            nrow=standard_val_data.shape[0]
         )
 
         save_original_and_reconstructed(
