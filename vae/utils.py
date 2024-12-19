@@ -15,7 +15,7 @@ def load_latest_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
     checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
     if model is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
