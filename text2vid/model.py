@@ -103,8 +103,10 @@ class TransformerVectorGenerator(nn.Module):
                 # Prepare for the next step
                 last_vector = out_vector
 
-                # Break condition (example: stop if some condition based on stop_logit is met)
-                # TODO: implement stop condition logic here based on stop_logits.
+                # Break if all inputs have stopped
+                stop_probs = torch.sigmoid(stop_logit)
+                if (stop_probs > 0.5).all():
+                    break
 
             output_vectors = torch.cat(generated_vectors, dim=1)
             stop_logits = torch.cat(stop_flags, dim=1)
