@@ -20,7 +20,7 @@ dependencies:
     - timm
     - pyparsing
     - pycocotools
-    - pandas
+    - transformers
     - pip:
         - discord-webhook
         - clean-fid
