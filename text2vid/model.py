@@ -1,8 +1,6 @@
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import Transformer
 
 class TransformerVectorGenerator(nn.Module):
     def __init__(
@@ -24,7 +22,7 @@ class TransformerVectorGenerator(nn.Module):
         self.max_output_length = max_output_length
 
         # Transformer model
-        self.transformer = Transformer(
+        self.transformer = nn.Transformer(
             d_model=embed_dim,
             nhead=nhead,
             num_encoder_layers=num_encoder_layers,
@@ -62,8 +60,11 @@ class TransformerVectorGenerator(nn.Module):
         """
         batch_size, src_seq_len, _ = src.size()
 
-        # Apply positional encoding
+        # Apply positional encoding to the source
         src = self.pos_encoder(src)
+
+        # Encode the source sequence (process the encoder once)
+        memory = self.transformer.encoder(src, src_mask=src_mask)
 
         if tgt is not None:
             # During training, use the target vectors as input to the decoder
@@ -73,16 +74,7 @@ class TransformerVectorGenerator(nn.Module):
             # Generate masks
             tgt_mask = self.generate_square_subsequent_mask(tgt.size(1)).to(src.device)
 
-            out = self.transformer(
-                src=src,
-                tgt=tgt_embed,
-                src_mask=src_mask,
-                tgt_mask=tgt_mask,
-                memory_mask=None,
-                src_key_padding_mask=None,
-                tgt_key_padding_mask=None,
-                memory_key_padding_mask=None
-            )
+            out = self.transformer.decoder(tgt_embed, memory, tgt_mask=tgt_mask)
 
             output_vectors = self.embed_to_vector(out)  # (batch_size, tgt_seq_length, vector_dim)
             stop_logits = self.stop_token(out).squeeze(-1)  # (batch_size, tgt_seq_length)
@@ -92,41 +84,37 @@ class TransformerVectorGenerator(nn.Module):
             generated_vectors = []
             stop_flags = []
 
-            # Initialize the first input to the decoder with noise
-            # TODO: Verify seed works
-            last_vector = torch.randn(batch_size, 1, self.vector_dim).to(src.device)
+            # Initialize the future target embeddings
+            last_vector = torch.zeros(batch_size, 1, self.vector_dim).to(src.device)
 
             for t in range(self.max_output_length):
-                tgt_embed = self.vector_to_embed(last_vector)  # (batch_size, 1, embed_dim)
+                tgt_embed = self.vector_to_embed(last_vector)
                 tgt_embed = self.pos_decoder(tgt_embed)
 
-                tgt_mask = self.generate_square_subsequent_mask(t=1).to(src.device)
+                # Decode step-by-step
+                out = self.transformer.decoder(tgt_embed, memory)
 
-                out = self.transformer(
-                    src=src,
-                    tgt=tgt_embed,
-                    src_mask=src_mask,
-                    tgt_mask=tgt_mask,
-                )
-
-                out_vector = self.embed_to_vector(out[:, -1:, :])  # (batch_size, 1, vector_dim)
-                stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)  # (batch_size, 1)
+                out_vector = self.embed_to_vector(out[:, -1:, :])
+                stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)
 
                 generated_vectors.append(out_vector)
                 stop_flags.append(stop_logit)
 
-                last_vector = out_vector  # For next step
+                # Prepare for the next step
+                last_vector = out_vector
 
-            # Concatenate all generated vectors and stop flags
-            output_vectors = torch.cat(generated_vectors, dim=1)  # (batch_size, max_output_length, vector_dim)
-            stop_logits = torch.cat(stop_flags, dim=1)          # (batch_size, max_output_length)
+                # Break condition (example: stop if some condition based on stop_logit is met)
+                # TODO: implement stop condition logic here based on stop_logits.
+
+            output_vectors = torch.cat(generated_vectors, dim=1)
+            stop_logits = torch.cat(stop_flags, dim=1)
             return output_vectors, stop_logits
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
-        
+
         pe = torch.zeros(max_len, d_model)  # (max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # (max_len, 1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))  # (d_model/2,)
