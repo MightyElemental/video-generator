@@ -14,7 +14,8 @@ class VideoCaptionDataset(Dataset):
             tokenizer_name: Name of the pre-trained tokenizer.
             max_src_length: Maximum number of tokens for the input text.
         """
-        self.data = []
+        self.vectors = []
+        self.captions = []
         with open(pickle_file, 'rb') as f:
             raw_data = pickle.load(f)
 
@@ -27,20 +28,24 @@ class VideoCaptionDataset(Dataset):
         # Process each object in the pickle file
         for obj in raw_data:
             enCaps = obj['enCap']
-            latent_vectors = obj['latent_vectors']  # List of vectors
+            self.vectors.append(obj['latent_vectors'])
+
             for enCap in enCaps:
-                self.data.append({
+                self.captions.append({
                     'enCap': enCap,
-                    'latent_vectors': latent_vectors
+                    'vectors': len(self.vectors) - 1
                 })
 
+        # TODO: Pre-process data to speed up training?
+
     def __len__(self):
-        return len(self.data)
+        return len(self.captions)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        item = self.captions[idx]
         text = item['enCap']
-        latent_vectors = item['latent_vectors']  # List of lists or numpy arrays
+        vector_idx = item['latent_vectors']
+        latent_vectors = self.vectors[vector_idx]  # List of lists or numpy arrays
 
         # Tokenize the text
         encoding = self.tokenizer(
