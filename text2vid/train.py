@@ -27,7 +27,8 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_fn
+        prefetch_factor=2,
+        collate_fn=collate_fn,
     )
 
     # Initialize model
@@ -106,7 +107,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
+    parser.add_argument('--num_workers', type=int, default=6, help='Number of DataLoader workers')
     parser.add_argument('--nhead', type=int, default=8, help='Number of attention heads')
     parser.add_argument('--num_encoder_layers', type=int, default=6, help='Number of encoder layers')
     parser.add_argument('--num_decoder_layers', type=int, default=6, help='Number of decoder layers')
