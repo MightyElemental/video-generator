@@ -64,7 +64,7 @@ class TransformerVectorGenerator(nn.Module):
         src = self.pos_encoder(src)
 
         # Encode the source sequence (process the encoder once)
-        memory = self.transformer.encoder(src, src_mask=src_mask)
+        memory = self.transformer.encoder(src, mask=src_mask)
 
         if tgt is not None:
             # During training, use the target vectors as input to the decoder
