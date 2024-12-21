@@ -166,3 +166,5 @@ vae/checkpoints/
 vae/data/
 vae/data
 vae/output_images/
+text2vid/checkpoints/
+data/
