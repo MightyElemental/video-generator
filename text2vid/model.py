@@ -43,6 +43,9 @@ class TransformerVectorGenerator(nn.Module):
         self.pos_encoder = PositionalEncoding(embed_dim, dropout, max_seq_length)
         self.pos_decoder = PositionalEncoding(embed_dim, dropout, max_output_length)
 
+        # Start token
+        self.start_token = nn.Parameter(torch.randn(1, 1, vector_dim))
+
     def generate_square_subsequent_mask(self, sz):
         """Generates an upper-triangular matrix of -inf, with zeros on diag."""
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -67,8 +70,10 @@ class TransformerVectorGenerator(nn.Module):
         memory = self.transformer.encoder(src, mask=src_mask)
 
         if tgt is not None:
+            start_token_batch = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, vector_dim)
+            tgt = torch.cat([start_token_batch, tgt], dim=1)  # Prepend START token
+
             # During training, use the target vectors as input to the decoder
-            # TODO: Add initialization vector
             tgt_embed = self.vector_to_embed(tgt)  # (batch_size, tgt_seq_length, embed_dim)
             tgt_embed = self.pos_decoder(tgt_embed)
 
@@ -76,6 +81,7 @@ class TransformerVectorGenerator(nn.Module):
             tgt_mask = self.generate_square_subsequent_mask(tgt.size(1)).to(src.device)
 
             out = self.transformer.decoder(tgt_embed, memory, tgt_mask=tgt_mask)
+            out = out[:, :-1, :] # Account for START token
 
             output_vectors = self.embed_to_vector(out)  # (batch_size, tgt_seq_length, vector_dim)
             stop_logits = self.stop_token(out).squeeze(-1)  # (batch_size, tgt_seq_length)
@@ -86,9 +92,8 @@ class TransformerVectorGenerator(nn.Module):
             stop_flags = []
 
             # Initialize the future target embeddings
-            # TODO: Add initialization vector
-            last_vector = torch.zeros(batch_size, 1, self.vector_dim).to(src.device)
-            generated_vectors.append(last_vector)
+            start = self.start_token.expand(batch_size, 1, -1).to(src.device)
+            generated_vectors.append(start)
 
             for _ in range(self.max_output_length):
                 tgt_embed = torch.cat(generated_vectors, dim=1) # Feed previous tokens back into the model
@@ -101,14 +106,13 @@ class TransformerVectorGenerator(nn.Module):
                 out_vector = self.embed_to_vector(out[:, -1:, :])
                 stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)
 
+                generated_vectors.append(out_vector)
                 stop_flags.append(stop_logit)
 
                 # Break if all inputs have stopped
                 stop_probs = torch.sigmoid(stop_logit)
                 if (stop_probs > 0.5).all():
                     break
-                else:
-                    generated_vectors.append(out_vector)
 
             output_vectors = torch.cat(generated_vectors[1:], dim=1)
             stop_logits = torch.cat(stop_flags, dim=1)
