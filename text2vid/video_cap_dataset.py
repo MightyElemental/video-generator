@@ -44,7 +44,7 @@ class VideoCaptionDataset(Dataset):
     def __getitem__(self, idx):
         item = self.captions[idx]
         text = item['enCap']
-        vector_idx = item['latent_vectors']
+        vector_idx = item['vectors']
         latent_vectors = self.vectors[vector_idx]  # List of lists or numpy arrays
 
         # Tokenize the text
