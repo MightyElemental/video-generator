@@ -21,8 +21,11 @@ def load_transformer_model(checkpoint_path: str, device: torch.device, **kwargs)
         TransformerVectorGenerator: The loaded transformer model in evaluation mode.
     """
     model = TransformerVectorGenerator(**kwargs).to(device)
-    state_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    # TODO: Add epoch and optimizer states to checkpoint
+    state_dict = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False
+    )["model_state_dict"]
     model.load_state_dict(state_dict)
     model.eval()
     return model
@@ -42,7 +45,12 @@ def load_vae_model(checkpoint_path: str, device: torch.device, img_size: int, la
         VAE: The loaded VAE model in evaluation mode.
     """
     vae = VAE(img_size=img_size, latent_dim=latent_dim, multiplier=multiplier).to(device)
-    vae.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False)["model_state_dict"])
+    state_dict = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False
+    )["model_state_dict"]
+    vae.load_state_dict(state_dict)
     vae.eval()
     return vae
 

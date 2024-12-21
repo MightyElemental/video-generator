@@ -10,6 +10,7 @@ from tqdm import tqdm
 import numpy as np
 
 from video_cap_dataset import VideoCaptionDataset, collate_fn
+from vae.utils import load_latest_checkpoint
 
 
 def train(args):
@@ -19,6 +20,8 @@ def train(args):
     np.random.seed(args.seed)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    print("==> Loading dataset")
 
     # Initialize dataset and dataloader
     dataset = VideoCaptionDataset(args.data_path, tokenizer_name=args.tokenizer)
@@ -30,6 +33,8 @@ def train(args):
         prefetch_factor=2,
         collate_fn=collate_fn,
     )
+
+    print("==> Initializing model")
 
     # Initialize model
     model = TransformerVectorGenerator(
@@ -45,13 +50,22 @@ def train(args):
     )
     model = model.to(device)
 
+    print("==> Initializing optimizer")
+
     # Define optimizer and loss functions
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion_vector = nn.MSELoss()
     criterion_stop = nn.BCEWithLogitsLoss()
 
+    start_epoch = 0
+    if not args.ignore_checkpoint:
+        print("==> Loading checkpoint")
+        start_epoch = load_latest_checkpoint(model, optimizer, device, args.checkpoint_dir)
+
+    print("==> Starting training")
+
     # Training loop
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch + 1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
@@ -63,7 +77,7 @@ def train(args):
             optimizer.zero_grad()
 
             # Forward pass
-            output_vectors, stop_logits = model(src, tgt=tgt)  
+            output_vectors, stop_logits = model(src, tgt=tgt)
             # output_vectors: (batch_size, tgt_seq_length, vector_dim)
             # stop_logits: (batch_size, tgt_seq_length)
 
@@ -88,20 +102,25 @@ def train(args):
             progress_bar.set_postfix({'Loss': loss.item()})
 
         avg_loss = epoch_loss / len(dataloader)
-        print(f"Epoch {epoch+1} Loss: {avg_loss:.4f}")
+        print(f"Epoch {epoch} Loss: {avg_loss:.4f}")
 
         # Save the model checkpoint
         os.makedirs(args.checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(args.checkpoint_dir, f'model_epoch_{epoch+1}.pt')
-        torch.save(model.state_dict(), checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}")
+        checkpoint_path = os.path.join(args.checkpoint_dir, f'model_epoch_{epoch}.pth')
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, checkpoint_path)
+        print(f"==> Saved checkpoint: {checkpoint_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Train Transformer Vector Generator")
 
     # Data parameters
     parser.add_argument('--data_path', type=str, required=True, help='Path to the pickle data file')
-    parser.add_argument('--tokenizer', type=str, default='bert-base-uncased', help='Pre-trained tokenizer name')
+    parser.add_argument('--tokenizer', type=str, default='bert-base-uncased',
+        help='Pre-trained tokenizer name')
 
     # Training parameters
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
@@ -116,7 +135,9 @@ def main():
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Maximum gradient norm for clipping')
     parser.add_argument('--max_output_length', type=int, default=500, help='Maximum length of output vectors')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--seed', type=int, default=4638511, help='Random seed')
+    parser.add_argument('--ignore_checkpoint', action='store_true', default=False,
+                        help='Ignore loading the latest checkpoint and start training from scratch')
 
     args = parser.parse_args()
 
