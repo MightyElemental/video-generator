@@ -4,7 +4,7 @@ import subprocess
 import torch
 from transformers import AutoTokenizer, AutoModel
 from PIL import Image
-import numpy as np
+from torchvision.transforms import v2
 from text2vid.model import TransformerVectorGenerator
 from vae.vae_model import VAE
 
@@ -90,6 +90,7 @@ def generate_vectors(transformer_model: TransformerVectorGenerator, src: torch.T
     """
     with torch.no_grad():
         output_vectors, stop_logits = transformer_model(src.to(device), tgt=None)
+        # TODO: Trim last vector (stop vector)
         # output_vectors: (1, seq_length, vector_dim)
         # stop_logits: (1, seq_length)
     return output_vectors.squeeze(0), stop_logits.squeeze(0)
@@ -116,7 +117,13 @@ def truncate_vectors(vectors: torch.Tensor, stop_logits: torch.Tensor) -> torch.
 
     return truncated_vectors
 
-def generate_images(vae_model: VAE, vectors: torch.Tensor, device: torch.device, image_dir: str) -> list:
+def generate_images(
+    vae_model: VAE,
+    vectors: torch.Tensor,
+    device: torch.device,
+    image_dir: str,
+    batch_size: int = 32
+    ) -> list:
     """
     Generates images from vectors using the VAE's decoder.
 
@@ -125,6 +132,7 @@ def generate_images(vae_model: VAE, vectors: torch.Tensor, device: torch.device,
         vectors (torch.Tensor): Truncated vectors of shape (seq_length, vector_dim).
         device (torch.device): Device to perform computations on.
         image_dir (str): Directory to save the generated images.
+        batch_size (int): Number of vectors to process in a batch.
 
     Returns:
         list: List of image file paths.
@@ -132,21 +140,26 @@ def generate_images(vae_model: VAE, vectors: torch.Tensor, device: torch.device,
     os.makedirs(image_dir, exist_ok=True)
     images = []
 
+    transform = v2.Normalize(
+        mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
+        std=[1/0.229, 1/0.224, 1/0.255]
+    )
+
     with torch.no_grad():
-        for i, vector in enumerate(vectors):
-            z = vector.unsqueeze(0).to(device)  # (1, vector_dim)
-            reconstructed = vae_model.decode(z)  # (1, channels, H, W)
+        for start in range(0, vectors.size(0), batch_size):
+            end = start + batch_size
+            batch_vectors = vectors[start:end].to(device)  # (batch_size, vector_dim)
+            reconstructed = vae_model.decode(batch_vectors)  # (batch_size, channels, H, W)
 
-            # Convert to image format
-            # Assuming output is in [-1, 1], scale to [0, 255]
-            # TODO: Replace with transform method
-            image_tensor = (reconstructed.squeeze(0).cpu().clamp(-1, 1) + 1) / 2 * 255  # (channels, H, W)
-            image_tensor = image_tensor.permute(1, 2, 0).numpy().astype(np.uint8)    # (H, W, channels)
+            # Apply transforms
+            transformed_images = transform(reconstructed)
 
-            image = Image.fromarray(image_tensor)
-            image_path = os.path.join(image_dir, f'image_{i:05d}.png')
-            image.save(image_path)
-            images.append(image_path)
+            # TODO: Replace with vutils
+            for i, image_array in enumerate(transformed_images):
+                image = Image.fromarray(image_array)
+                image_path = os.path.join(image_dir, f'image_{start + i:05d}.png')
+                image.save(image_path)
+                images.append(image_path)
 
     return images
 
@@ -189,8 +202,8 @@ def text_to_video(input_text: str,
                   embedder_name: str = 'bert-base-uncased',
                   max_src_length: int = 64,
                   max_output_length: int = 500,
-                  transformer_params: dict = None,
-                  vae_params: dict = None,
+                  transformer_params: dict | None = None,
+                  vae_params: dict | None = None,
                   fps: int = 30):
     """
     Generates a video from input text by using a transformer model to generate a sequence of vectors,
