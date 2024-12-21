@@ -10,7 +10,7 @@ from tqdm import tqdm
 import numpy as np
 
 from video_cap_dataset import VideoCaptionDataset, collate_fn
-from vae.utils import load_latest_checkpoint
+from utils import load_latest_checkpoint
 
 
 def train(args):
