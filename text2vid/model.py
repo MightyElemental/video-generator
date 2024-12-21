@@ -68,6 +68,7 @@ class TransformerVectorGenerator(nn.Module):
 
         if tgt is not None:
             # During training, use the target vectors as input to the decoder
+            # TODO: Add initialization vector
             tgt_embed = self.vector_to_embed(tgt)  # (batch_size, tgt_seq_length, embed_dim)
             tgt_embed = self.pos_decoder(tgt_embed)
 
@@ -85,10 +86,13 @@ class TransformerVectorGenerator(nn.Module):
             stop_flags = []
 
             # Initialize the future target embeddings
+            # TODO: Add initialization vector
             last_vector = torch.zeros(batch_size, 1, self.vector_dim).to(src.device)
+            generated_vectors.append(last_vector)
 
-            for t in range(self.max_output_length):
-                tgt_embed = self.vector_to_embed(last_vector)
+            for _ in range(self.max_output_length):
+                tgt_embed = torch.cat(generated_vectors, dim=1) # Feed previous tokens back into the model
+                tgt_embed = self.vector_to_embed(tgt_embed)
                 tgt_embed = self.pos_decoder(tgt_embed)
 
                 # Decode step-by-step
@@ -97,18 +101,16 @@ class TransformerVectorGenerator(nn.Module):
                 out_vector = self.embed_to_vector(out[:, -1:, :])
                 stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)
 
-                generated_vectors.append(out_vector)
                 stop_flags.append(stop_logit)
-
-                # Prepare for the next step
-                last_vector = out_vector
 
                 # Break if all inputs have stopped
                 stop_probs = torch.sigmoid(stop_logit)
                 if (stop_probs > 0.5).all():
                     break
+                else:
+                    generated_vectors.append(out_vector)
 
-            output_vectors = torch.cat(generated_vectors, dim=1)
+            output_vectors = torch.cat(generated_vectors[1:], dim=1)
             stop_logits = torch.cat(stop_flags, dim=1)
             return output_vectors, stop_logits
 
