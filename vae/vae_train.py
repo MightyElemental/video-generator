@@ -109,7 +109,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 # Load the latest model checkpoint (if available)
-start_epoch = load_latest_checkpoint(model, optimizer)
+start_epoch = load_latest_checkpoint(model, optimizer, device)
 
 # Loss function definition
 def loss_function(recon_x, x, mu, logvar, beta=1.0):

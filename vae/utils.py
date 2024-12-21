@@ -1,7 +1,12 @@
 import os
 import torch
 
-def load_latest_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
+def load_latest_checkpoint(
+    model: torch.nn.Module,
+    optimizer,
+    device: torch.device,
+    checkpoint_dir: str='checkpoints/'
+    ):
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
         return 0  # No checkpoints exist
@@ -11,11 +16,16 @@ def load_latest_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
     if not checkpoints:
         return 0  # No checkpoints available
 
-    latest_checkpoint = max(checkpoints, key=lambda f: int(f.split('_')[2].split('.')[0]))
+    # Extract epoch numbers and find the maximum
+    max_epoch = max(checkpoints, key=extract_epoch)
+    if max_epoch == -1:
+        return 0  # Invalid checkpoint filenames
+
+    latest_checkpoint = f'model_epoch_{max_epoch}.pth'
     checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location=device)
     if model is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
@@ -23,3 +33,9 @@ def load_latest_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
     epoch = checkpoint['epoch']
     print(f"Loaded checkpoint '{latest_checkpoint}' (epoch {epoch})")
     return epoch
+
+def extract_epoch(f):
+    try:
+        return int(f.split('_')[2].split('.')[0])
+    except (IndexError, ValueError):
+        return -1
