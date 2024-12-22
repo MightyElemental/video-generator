@@ -3,7 +3,7 @@ import tempfile
 import subprocess
 import torch
 from transformers import AutoTokenizer, AutoModel
-from PIL import Image
+import torchvision.utils as vutils
 from torchvision.transforms import v2
 from text2vid.model import TransformerVectorGenerator
 from vae.vae_model import VAE
@@ -162,11 +162,9 @@ def generate_images(
             # Apply transforms
             transformed_images = transform(reconstructed)
 
-            # TODO: Replace with vutils
             for i, image_array in enumerate(transformed_images):
-                image = Image.fromarray(image_array)
                 image_path = os.path.join(image_dir, f'image_{start + i:05d}.png')
-                image.save(image_path)
+                vutils.save_image(image_array, image_path, normalize=True)
                 images.append(image_path)
 
     return images
