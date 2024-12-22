@@ -1,7 +1,7 @@
 from generate import text_to_video
 
 input_text = "A man climbing a cliff"
-transformer_checkpoint = "text2vid/checkpoints/model_epoch_10.pt"
+transformer_checkpoint = "text2vid/checkpoints/model_epoch_10.pth"
 vae_checkpoint = "vae/checkpoints/vae_epoch_100.pth"
 output_video_path = "output_video.mp4"
 
