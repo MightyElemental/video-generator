@@ -51,7 +51,7 @@ model = VAE(img_size=IMG_SIZE, latent_dim=LATENT_DIM, multiplier=CHANNEL_MULTIPL
 model.eval()
 
 # Load the model's weights
-load_latest_checkpoint(model, None)
+load_latest_checkpoint(model, None, DEVICE)
 
 # Load the pickle file if it exists and save a list of present videoIDs
 if os.path.exists(OUTPUT_PATH):

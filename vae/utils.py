@@ -21,7 +21,7 @@ def load_latest_checkpoint(
     if max_epoch == -1:
         return 0  # Invalid checkpoint filenames
 
-    latest_checkpoint = f'model_epoch_{max_epoch}.pth'
+    latest_checkpoint = max_epoch
     checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
 
     # Load checkpoint
