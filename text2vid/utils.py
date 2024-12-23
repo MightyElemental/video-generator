@@ -4,6 +4,7 @@ import torch
 def load_latest_checkpoint(
     model: torch.nn.Module,
     optimizer,
+    scheduler,
     device: torch.device,
     checkpoint_dir: str='checkpoints/'
     ):
@@ -30,6 +31,8 @@ def load_latest_checkpoint(
         model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    if scheduler is not None and 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     epoch = checkpoint['epoch']
     print(f"Loaded checkpoint '{latest_checkpoint}' (epoch {epoch})")
     return epoch
