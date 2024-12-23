@@ -2,8 +2,6 @@ import os
 import tempfile
 import subprocess
 import torch
-from torchtext.vocab import Vectors
-from transformers import AutoTokenizer, AutoModel
 import torchvision.utils as vutils
 from torchvision.transforms import v2
 from torchtext.vocab import Vectors, GloVe
@@ -80,7 +78,7 @@ def tokenize_and_embed(
     tokens: list[str] = tokenizer(text)
     tokens_tensor = embedder.get_vecs_by_tokens(tokens[:max_length]).to(device)
 
-    return tokens_tensor
+    return tokens_tensor.unsqueeze(0)
 
 def generate_vectors(transformer_model: TransformerVectorGenerator, src: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     """
