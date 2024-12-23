@@ -44,7 +44,7 @@ class TransformerVectorGenerator(nn.Module):
         self.pos_decoder = PositionalEncoding(embed_dim, dropout, max_output_length)
 
         # Start token
-        self.start_token = nn.Parameter(torch.randn(1, 1, vector_dim))
+        self.start_token = torch.zeros(1, 1, vector_dim)
 
     def generate_square_subsequent_mask(self, sz):
         """Generates an upper-triangular matrix of -inf, with zeros on diag."""
@@ -67,7 +67,7 @@ class TransformerVectorGenerator(nn.Module):
             output_vectors: (batch_size, tgt_seq_length, vector_dim)
             stop_logits: (batch_size, tgt_seq_length)
         """
-        start_token_batch = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, vector_dim)
+        start_token_batch = self.start_token.to(memory.device).expand(batch_size, 1, -1)  # (batch_size, 1, vector_dim)
         tgt = torch.cat([start_token_batch, tgt], dim=1)  # Prepend START token
 
         # During training, use the target vectors as input to the decoder
@@ -101,7 +101,7 @@ class TransformerVectorGenerator(nn.Module):
         stop_flags = []
 
         # Initialize the future target embeddings
-        start = self.start_token.expand(batch_size, 1, -1).to(memory.device)
+        start = self.start_token.to(memory.device).expand(batch_size, 1, -1).to(memory.device)
         generated_vectors.append(start)
 
         for _ in range(self.max_output_length):
