@@ -2,9 +2,12 @@ import os
 import tempfile
 import subprocess
 import torch
+from torchtext.vocab import Vectors
 from transformers import AutoTokenizer, AutoModel
 import torchvision.utils as vutils
 from torchvision.transforms import v2
+from torchtext.vocab import Vectors, GloVe
+from torchtext.data.utils import get_tokenizer
 from text2vid.model import TransformerVectorGenerator
 from vae.vae_model import VAE
 
@@ -54,35 +57,30 @@ def load_vae_model(checkpoint_path: str, device: torch.device, img_size: int, la
     vae.eval()
     return vae
 
-def tokenize_and_embed(text: str, tokenizer, embedder, device: torch.device, max_length: int = 64) -> torch.Tensor:
+def tokenize_and_embed(
+    text: str,
+    tokenizer,
+    embedder: Vectors,
+    device: torch.device,
+    max_length: int = 64
+    ) -> torch.Tensor:
     """
     Tokenizes and embeds the input text.
 
     Args:
         text (str): The input text to tokenize and embed.
-        tokenizer (AutoTokenizer): Pre-trained tokenizer.
-        embedder (AutoModel): Pre-trained embedder model.
+        tokenizer (function): tokenizer function.
+        embedder (Vectors): Pre-trained embeddings.
         device (torch.device): Device to perform computations on.
-        max_length (int, optional): Maximum token length. Defaults to 64.
+        max_length (int): Maximum token length. Defaults to 64.
 
     Returns:
-        torch.Tensor: The embedded text tensor of shape (1, max_length, embed_dim).
+        torch.Tensor: The embedded text tensor of shape (1, <=max_length, embed_dim).
     """
-    encoding = tokenizer(
-        text,
-        padding='max_length',
-        truncation=True,
-        max_length=max_length,
-        return_tensors='pt'
-    )
-    input_ids = encoding['input_ids'].to(device)             # (1, max_length)
-    attention_mask = encoding['attention_mask'].to(device)   # (1, max_length)
+    tokens: list[str] = tokenizer(text)
+    tokens_tensor = embedder.get_vecs_by_tokens(tokens[:max_length]).to(device)
 
-    with torch.no_grad():
-        embeddings = embedder(input_ids, attention_mask=attention_mask)
-        last_hidden_state = embeddings.last_hidden_state      # (1, max_length, embed_dim)
-
-    return last_hidden_state
+    return tokens_tensor
 
 def generate_vectors(transformer_model: TransformerVectorGenerator, src: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -204,8 +202,7 @@ def text_to_video(input_text: str,
                   transformer_checkpoint: str,
                   vae_checkpoint: str,
                   output_video_path: str,
-                  tokenizer_name: str = 'bert-base-uncased',
-                  embedder_name: str = 'bert-base-uncased',
+                  embed_dim: int = 300,
                   max_src_length: int = 64,
                   max_output_length: int = 500,
                   transformer_params: dict | None = None,
@@ -220,8 +217,7 @@ def text_to_video(input_text: str,
         transformer_checkpoint (str): Path to the transformer model checkpoint.
         vae_checkpoint (str): Path to the VAE model checkpoint.
         output_video_path (str): Path to save the generated MP4 video.
-        tokenizer_name (str, optional): Name of the pre-trained tokenizer. Defaults to 'bert-base-uncased'.
-        embedder_name (str, optional): Name of the pre-trained embedder model. Defaults to 'bert-base-uncased'.
+        embed_dim (int, optional): Dimension of the embeddings. Defaults to 300.
         max_src_length (int, optional): Maximum token length for the input text. Defaults to 64.
         max_output_length (int, optional): Maximum number of vectors to generate. Defaults to 500.
         transformer_params (dict, optional): Additional parameters for the transformer model. Defaults to None.
@@ -233,17 +229,16 @@ def text_to_video(input_text: str,
     print("==> Loading tokenizer / embedder")
 
     # Load tokenizer and embedder
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    embedder = AutoModel.from_pretrained(embedder_name).to(device)
-    embedder.eval()
+    tokenizer = get_tokenizer('basic_english')
+    embedder = GloVe(name='840B', dim=embed_dim)
 
     # Load transformer model
     if transformer_params is None:
         # These should match the training configuration
         transformer_params = {
-            'embed_dim': 768,               # Example for BERT-base
+            'embed_dim': embed_dim,
             'vector_dim': 200,
-            'nhead': 8,
+            'nhead': 6,
             'num_encoder_layers': 6,
             'num_decoder_layers': 6,
             'dim_feedforward': 2048,

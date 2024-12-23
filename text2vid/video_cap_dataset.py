@@ -3,26 +3,34 @@ import pickle
 import torch
 from torch.utils.data import Dataset
 
-from transformers import AutoTokenizer, AutoModel
+from torchtext.vocab import GloVe
+from torchtext.data.utils import get_tokenizer
 
 
 class VideoCaptionDataset(Dataset):
-    def __init__(self, pickle_file, tokenizer_name='bert-base-uncased', max_src_length=64):
+    def __init__(
+        self,
+        pickle_file: str,
+        max_src_length: int = 64,
+        glove_dim: int = 300,
+        unk_vector: torch.Tensor | None = None
+        ):
         """
         Args:
-            pickle_file: Path to the pickle file containing the data.
-            tokenizer_name: Name of the pre-trained tokenizer.
-            max_src_length: Maximum number of tokens for the input text.
+            pickle_file (str): Path to the pickle file containing the data.
+            max_src_length (int): Maximum number of tokens for the input text.
+            glove_dim (int): Dimension of the GloVe vectors.
+            unk_vector (torch.Tensor, optional): Vector to represent unknown tokens.
+                                                  If None, uses a zero vector.
         """
         self.vectors = []
         self.captions = []
         with open(pickle_file, 'rb') as f:
             raw_data = pickle.load(f)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.embedder = AutoModel.from_pretrained(tokenizer_name)
-        self.embedder.eval()  # Freeze embedder
-
+        self.tokenizer = get_tokenizer('basic_english')
+        self.vocab = GloVe(name='840B', dim=glove_dim, unk_init=unk_vector)
+        self.embed_dim = glove_dim
         self.max_src_length = max_src_length
 
         # Process each object in the pickle file
@@ -36,8 +44,6 @@ class VideoCaptionDataset(Dataset):
                     'vectors': len(self.vectors) - 1
                 })
 
-        # TODO: Pre-process data to speed up training?
-
     def __len__(self):
         return len(self.captions)
 
@@ -45,31 +51,20 @@ class VideoCaptionDataset(Dataset):
         item = self.captions[idx]
         text = item['enCap']
         vector_idx = item['vectors']
-        latent_vectors = self.vectors[vector_idx]  # List of lists or numpy arrays
+        latent_vectors = self.vectors[vector_idx]
 
         # Tokenize the text
-        encoding = self.tokenizer(
-            text,
-            padding='max_length',
-            truncation=True,
-            max_length=self.max_src_length,
-            return_tensors='pt'
-        )
-        input_ids = encoding['input_ids'].squeeze(0)         # (max_src_length)
-        attention_mask = encoding['attention_mask'].squeeze(0)  # (max_src_length)
+        tokens: list[str] = self.tokenizer(text)
+        tokens = tokens[:self.max_src_length]
 
-        # Get the embeddings from the embedder
-        with torch.no_grad():
-            embeddings = self.embedder(input_ids.unsqueeze(0), attention_mask=attention_mask.unsqueeze(0))
-            last_hidden_state = embeddings.last_hidden_state.squeeze(0)  # (max_src_length, embed_dim)
-
-        # Convert latent_vectors to tensor
-        latent_vectors = torch.tensor(latent_vectors, dtype=torch.float)  # (seq_length, vector_dim)
+        # Initialize src tensor - pad with zeros
+        src = torch.zeros(self.max_src_length, self.embed_dim)
+        for i, token in enumerate(self.vocab.get_vecs_by_tokens(tokens)):
+            src[i] = token
 
         return {
-            'src': last_hidden_state,          # (max_src_length, embed_dim)
-            'src_mask': None,                  # Placeholder (can implement if needed)
-            'tgt': latent_vectors               # (seq_length, vector_dim)
+            'src': src,  # (max_src_length, embed_dim)
+            'tgt': torch.tensor(latent_vectors, dtype=torch.float)  # (seq_length, vector_dim)
         }
 
 def collate_fn(batch):

@@ -24,7 +24,7 @@ def train(args):
     print("==> Loading dataset")
 
     # Initialize dataset and dataloader
-    dataset = VideoCaptionDataset(args.data_path, tokenizer_name=args.tokenizer)
+    dataset = VideoCaptionDataset(args.data_path, glove_dim=300)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -38,7 +38,7 @@ def train(args):
 
     # Initialize model
     model = TransformerVectorGenerator(
-        embed_dim=dataset.embedder.config.hidden_size,
+        embed_dim=dataset.embed_dim,
         vector_dim=200,
         nhead=args.nhead,
         num_encoder_layers=args.num_encoder_layers,
@@ -68,7 +68,7 @@ def train(args):
     for epoch in range(start_epoch + 1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}")
 
         for batch in progress_bar:
             src = batch['src'].to(device)             # (batch_size, src_seq_length, embed_dim)
@@ -119,15 +119,13 @@ def main():
 
     # Data parameters
     parser.add_argument('--data_path', type=str, required=True, help='Path to the pickle data file')
-    parser.add_argument('--tokenizer', type=str, default='bert-base-uncased',
-        help='Pre-trained tokenizer name')
 
     # Training parameters
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--num_workers', type=int, default=6, help='Number of DataLoader workers')
-    parser.add_argument('--nhead', type=int, default=8, help='Number of attention heads')
+    parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
     parser.add_argument('--num_encoder_layers', type=int, default=6, help='Number of encoder layers')
     parser.add_argument('--num_decoder_layers', type=int, default=6, help='Number of decoder layers')
     parser.add_argument('--dim_feedforward', type=int, default=2048, help='Dimension of feedforward network')

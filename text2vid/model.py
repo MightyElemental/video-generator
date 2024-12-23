@@ -5,9 +5,9 @@ import torch.nn as nn
 class TransformerVectorGenerator(nn.Module):
     def __init__(
         self,
-        embed_dim=768,       # Dimension of text embeddings
+        embed_dim=300,       # Dimension of text embeddings
         vector_dim=200,      # Dimension of output vectors
-        nhead=8,
+        nhead=6,
         num_encoder_layers=6,
         num_decoder_layers=6,
         dim_feedforward=2048,
@@ -52,7 +52,82 @@ class TransformerVectorGenerator(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, src, src_mask=None, tgt=None, tgt_mask=None):
+    def _train_step(
+        self,
+        batch_size: int,
+        memory: torch.Tensor,
+        tgt: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            batch_size: the size of the batch
+            memory: (batch_size, memory_seq_length, vector_dim)
+            tgt: (batch_size, tgt_seq_length, vector_dim)
+        Returns:
+            output_vectors: (batch_size, tgt_seq_length, vector_dim)
+            stop_logits: (batch_size, tgt_seq_length)
+        """
+        start_token_batch = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, vector_dim)
+        tgt = torch.cat([start_token_batch, tgt], dim=1)  # Prepend START token
+
+        # During training, use the target vectors as input to the decoder
+        tgt_embed = self.vector_to_embed(tgt)  # (batch_size, tgt_seq_length, embed_dim)
+        tgt_embed = self.pos_decoder(tgt_embed)
+
+        # Generate masks
+        tgt_mask = self.generate_square_subsequent_mask(tgt.size(1)).to(tgt.device)
+
+        out = self.transformer.decoder(tgt_embed, memory, tgt_mask=tgt_mask)
+        out = out[:, :-1, :] # Account for START token
+
+        output_vectors = self.embed_to_vector(out)  # (batch_size, tgt_seq_length, vector_dim)
+        stop_logits = self.stop_token(out).squeeze(-1)  # (batch_size, tgt_seq_length)
+        return output_vectors, stop_logits
+
+    def _infer(
+        self,
+        batch_size: int,
+        memory: torch.Tensor
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            batch_size: the size of the batch
+            memory: (batch_size, memory_seq_length, vector_dim)
+        Returns:
+            output_vectors: (batch_size, tgt_seq_length, vector_dim)
+            stop_logits: (batch_size, tgt_seq_length)
+        """
+        generated_vectors = []
+        stop_flags = []
+
+        # Initialize the future target embeddings
+        start = self.start_token.expand(batch_size, 1, -1).to(memory.device)
+        generated_vectors.append(start)
+
+        for _ in range(self.max_output_length):
+            tgt_embed = torch.cat(generated_vectors, dim=1) # Feed previous tokens back into the model
+            tgt_embed = self.vector_to_embed(tgt_embed)
+            tgt_embed = self.pos_decoder(tgt_embed)
+
+            # Decode step-by-step
+            out = self.transformer.decoder(tgt_embed, memory)
+
+            out_vector = self.embed_to_vector(out[:, -1:, :])
+            stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)
+
+            generated_vectors.append(out_vector)
+            stop_flags.append(stop_logit)
+
+            # Break if all inputs have stopped
+            stop_probs = torch.sigmoid(stop_logit)
+            if (stop_probs > 0.5).all():
+                break
+
+        output_vectors = torch.cat(generated_vectors[1:], dim=1)
+        stop_logits = torch.cat(stop_flags, dim=1)
+        return output_vectors, stop_logits
+
+    def forward(self, src, src_mask=None, tgt=None) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             src: (batch_size, src_seq_length, embed_dim)
@@ -61,7 +136,7 @@ class TransformerVectorGenerator(nn.Module):
             output_vectors: (batch_size, tgt_seq_length, vector_dim)
             stop_logits: (batch_size, tgt_seq_length)
         """
-        batch_size, src_seq_len, _ = src.size()
+        batch_size, _, _ = src.size()
 
         # Apply positional encoding to the source
         src = self.pos_encoder(src)
@@ -70,53 +145,13 @@ class TransformerVectorGenerator(nn.Module):
         memory = self.transformer.encoder(src, mask=src_mask)
 
         if tgt is not None:
-            start_token_batch = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, vector_dim)
-            tgt = torch.cat([start_token_batch, tgt], dim=1)  # Prepend START token
-
-            # During training, use the target vectors as input to the decoder
-            tgt_embed = self.vector_to_embed(tgt)  # (batch_size, tgt_seq_length, embed_dim)
-            tgt_embed = self.pos_decoder(tgt_embed)
-
-            # Generate masks
-            tgt_mask = self.generate_square_subsequent_mask(tgt.size(1)).to(src.device)
-
-            out = self.transformer.decoder(tgt_embed, memory, tgt_mask=tgt_mask)
-            out = out[:, :-1, :] # Account for START token
-
-            output_vectors = self.embed_to_vector(out)  # (batch_size, tgt_seq_length, vector_dim)
-            stop_logits = self.stop_token(out).squeeze(-1)  # (batch_size, tgt_seq_length)
-            return output_vectors, stop_logits
+            # During training, the target sequence is provided and masked
+            return self._train_step(batch_size, memory, tgt)
         else:
             # During inference, generate the target sequence step by step
-            generated_vectors = []
-            stop_flags = []
-
-            # Initialize the future target embeddings
-            start = self.start_token.expand(batch_size, 1, -1).to(src.device)
-            generated_vectors.append(start)
-
-            for _ in range(self.max_output_length):
-                tgt_embed = torch.cat(generated_vectors, dim=1) # Feed previous tokens back into the model
-                tgt_embed = self.vector_to_embed(tgt_embed)
-                tgt_embed = self.pos_decoder(tgt_embed)
-
-                # Decode step-by-step
-                out = self.transformer.decoder(tgt_embed, memory)
-
-                out_vector = self.embed_to_vector(out[:, -1:, :])
-                stop_logit = self.stop_token(out[:, -1:, :]).squeeze(-1)
-
-                generated_vectors.append(out_vector)
-                stop_flags.append(stop_logit)
-
-                # Break if all inputs have stopped
-                stop_probs = torch.sigmoid(stop_logit)
-                if (stop_probs > 0.5).all():
-                    break
-
-            output_vectors = torch.cat(generated_vectors[1:], dim=1)
-            stop_logits = torch.cat(stop_flags, dim=1)
-            return output_vectors, stop_logits
+            # Only the memory (which contains the text encoding) is required
+            # The inference step generates new data based on a start token
+            return self._infer(batch_size, memory)
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
