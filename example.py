@@ -12,7 +12,7 @@ text_to_video(
     output_video_path=output_video_path,
     embed_dim=300,
     max_src_length=64,
-    max_output_length=500,
+    max_output_length=300,
     transformer_params={
         'embed_dim': 300,
         'vector_dim': 200,
@@ -21,7 +21,7 @@ text_to_video(
         'num_decoder_layers': 6,
         'dim_feedforward': 2048,
         'max_seq_length': 64,
-        'max_output_length': 500
+        'max_output_length': 300
     },
     vae_params={
         'img_size': 256,

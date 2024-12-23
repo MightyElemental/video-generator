@@ -2,6 +2,7 @@
 import pickle
 import torch
 from torch.utils.data import Dataset
+import numpy as np
 
 from torchtext.vocab import GloVe
 from torchtext.data.utils import get_tokenizer
@@ -13,7 +14,8 @@ class VideoCaptionDataset(Dataset):
         pickle_file: str,
         max_src_length: int = 64,
         glove_dim: int = 300,
-        unk_vector: torch.Tensor | None = None
+        unk_vector: torch.Tensor | None = None,
+        max_output_length: int = 300,
         ):
         """
         Args:
@@ -36,7 +38,7 @@ class VideoCaptionDataset(Dataset):
         # Process each object in the pickle file
         for obj in raw_data:
             enCaps = obj['enCap']
-            self.vectors.append(obj['latent_vectors'])
+            self.vectors.append(torch.tensor(np.array(obj['latent_vectors'][:max_output_length-1]), dtype=torch.float))
 
             for enCap in enCaps:
                 self.captions.append({
@@ -64,7 +66,7 @@ class VideoCaptionDataset(Dataset):
 
         return {
             'src': src,  # (max_src_length, embed_dim)
-            'tgt': torch.tensor(latent_vectors, dtype=torch.float)  # (seq_length, vector_dim)
+            'tgt': latent_vectors  # (seq_length, vector_dim)
         }
 
 def collate_fn(batch):

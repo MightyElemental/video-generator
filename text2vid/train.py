@@ -22,8 +22,16 @@ def train(args):
     print("==> Loading dataset")
 
     # Initialize dataset
-    train_dataset = VideoCaptionDataset(args.data_path, glove_dim=300)
-    val_dataset = VideoCaptionDataset(args.val_path, glove_dim=300)
+    train_dataset = VideoCaptionDataset(
+        args.data_path,
+        glove_dim=300,
+        max_output_length=args.max_output_length
+    )
+    val_dataset = VideoCaptionDataset(
+        args.val_path,
+        glove_dim=300,
+        max_output_length=args.max_output_length
+    )
 
     # Initialize dataloaders
     train_loader = DataLoader(
