@@ -73,7 +73,7 @@ def train(args):
     print("==> Initializing optimizer and scheduler")
 
     # Define optimizer and loss functions
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # Define a learning rate scheduler that reduces LR on plateau
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -186,6 +186,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=1e-5, help='Weight decay for optimizer')
     parser.add_argument('--num_workers', type=int, default=6, help='Number of DataLoader workers')
     parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
     parser.add_argument('--num_encoder_layers', type=int, default=6, help='Number of encoder layers')
