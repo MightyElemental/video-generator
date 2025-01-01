@@ -1,6 +1,7 @@
 import os
 import json
 from pickle import HIGHEST_PROTOCOL
+from typing import Optional, Callable, List
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -14,12 +15,13 @@ class VideoCaptionDataset(Dataset):
         self,
         json_file: str,
         root_dir: str,
-        cache_path: str | None = None,
+        cache_path: Optional[str] = None,
         max_src_length: int = 64,
         glove_dim: int = 300,
-        unk_vector: torch.Tensor | None = None,
+        unk_vector: Optional[torch.Tensor] = None,
         max_output_length: int = 300,
-        image_size: int = 256
+        image_size: int = 256,
+        frame_selection_fn: Optional[Callable[[List[int]], List[int]]] = None,
     ):
         """
         Args:
@@ -46,6 +48,7 @@ class VideoCaptionDataset(Dataset):
         self.root_dir = root_dir
         self.cache_path = cache_path
         self.image_size = image_size
+        self.frame_selection_fn = frame_selection_fn
 
         # Define image transformations
         self.transform = transforms.Compose([
@@ -101,6 +104,11 @@ class VideoCaptionDataset(Dataset):
         image_files = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
         image_paths = [os.path.join(image_dir, f) for f in image_files]
 
+        # Use frame selection function if present
+        if self.frame_selection_fn:
+            selected_indices = self.frame_selection_fn(list(range(len(image_paths))))
+            image_paths = [image_paths[i] for i in selected_indices]
+
         # Limit the number of images per sequence
         image_paths = image_paths[:self.max_output_length]
 
@@ -148,7 +156,8 @@ class VideoCaptionDataset(Dataset):
 
         return {
             'src': src,               # (max_src_length, embed_dim)
-            'tgt': images             # (max_output_length, C, H, W)
+            'tgt': images,            # (max_output_length, C, H, W)
+            'prompt': text            # The prompt as a human-readable string
         }
 
 def collate_fn(batch) -> dict[str, torch.Tensor]:
@@ -159,6 +168,7 @@ def collate_fn(batch) -> dict[str, torch.Tensor]:
     """
     src_batch = [item['src'] for item in batch]
     tgt_batch = [item['tgt'] for item in batch]
+    prompt_batch = [item['prompt'] for item in batch]
 
     batch_size = len(src_batch)
     embed_dim = src_batch[0].size(1)
@@ -179,4 +189,5 @@ def collate_fn(batch) -> dict[str, torch.Tensor]:
         'src': src_padded,               # (batch_size, max_src_length, embed_dim)
         'tgt': tgt_padded,               # (batch_size, max_output_length, C, H, W)
         'src_lengths': src_lengths,
+        'prompt': prompt_batch,
     }

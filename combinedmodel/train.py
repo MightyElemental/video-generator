@@ -1,5 +1,6 @@
 import os
 import random
+from typing import Optional, List
 import argparse
 import torch
 from torch.utils.data import DataLoader
@@ -7,9 +8,9 @@ import torch.nn.functional as F
 from model import TransformerVAEModel
 from tqdm import tqdm
 import numpy as np
+import torchvision.utils as vutils
 
 from video_cap_dataset import VideoCaptionDataset, collate_fn  # Ensure this is updated as per the new dataset class
-
 from utils import load_latest_checkpoint  # May not be needed since VAE and Transformer are trained together
 
 def loss_function(recon_x, x, mu, logvar):
@@ -20,6 +21,37 @@ def loss_function(recon_x, x, mu, logvar):
     # KL divergence between the learned latent distribution and standard normal
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
     return recon_loss + kl_loss
+
+def save_batch_sample(
+    checkpoint_dir: str,
+    epoch: int,
+    total_batch: int,
+    prompts: Optional[List[str]],
+    tgt_images: torch.Tensor,
+):
+    # Create samples directory
+    samples_dir = os.path.join(checkpoint_dir, 'samples')  # Directory to save samples
+    os.makedirs(samples_dir, exist_ok=True)
+
+    # Create folder named "{epoch}-{total_batch}"
+    sample_folder = os.path.join(samples_dir, f"{epoch}-{total_batch}")
+    os.makedirs(sample_folder, exist_ok=True)
+
+    # Save the first image sequence in the batch
+    first_sequence = tgt_images[0]  # (max_tgt_length, C, H, W)
+    for i, img in enumerate(first_sequence):
+        img_path = os.path.join(sample_folder, f"image_{i+1:04d}.png")
+        vutils.save_image(img, img_path)
+
+    # Save the prompt
+    if prompts:
+        prompt = prompts[0]
+    else:
+        prompt = 'no_prompt_available'
+
+    prompt_path = os.path.join(sample_folder, "prompt.txt")
+    with open(prompt_path, 'w', encoding="utf-8") as f:
+        f.write(prompt)
 
 def train(args):
     # Set random seeds for reproducibility
@@ -36,6 +68,9 @@ def train(args):
 
     print("==> Loading dataset")
 
+    # select every other frame
+    frame_selection_fn = lambda lis: lis[::2]
+
     # Initialize dataset
     train_dataset = VideoCaptionDataset(
         json_file=args.data_path,
@@ -44,6 +79,7 @@ def train(args):
         glove_dim=300,
         max_output_length=args.max_output_length,
         image_size=args.image_size,
+        frame_selection_fn=frame_selection_fn,
     )
     val_dataset = VideoCaptionDataset(
         json_file=args.val_path,
@@ -52,6 +88,7 @@ def train(args):
         glove_dim=300,
         max_output_length=args.max_output_length,
         image_size=args.image_size,
+        frame_selection_fn=frame_selection_fn,
     )
 
     # Initialize dataloaders
@@ -70,6 +107,7 @@ def train(args):
         shuffle=False,
         num_workers=args.num_workers,
         prefetch_factor=2,
+        pin_memory=True,
         collate_fn=collate_fn,
     )
 
@@ -88,11 +126,14 @@ def train(args):
         dropout=args.dropout,
         max_seq_length=train_dataset.max_src_length,
         max_output_length=args.max_output_length,
-        hidden_vae_dims=[32, 64, 128, 256, 256]
+        hidden_vae_dims=[32, 64, 128, 256, 512]
     )
     model = model.to(device)
 
     print("==> Initializing optimizer and scheduler")
+
+    # Define loss function
+    criterion = torch.nn.MSELoss()
 
     # Define optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -128,6 +169,8 @@ def train(args):
 
     print("==> Starting training")
 
+    total_batch = 0
+
     for epoch in range(start_epoch + 1, args.epochs + 1):
         # == Training phase ==
         model.train()
@@ -135,13 +178,17 @@ def train(args):
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [Train]")
 
         for batch in progress_bar:
+            total_batch += 1
+
             src = batch['src'].to(device)                  # (batch_size, max_src_length, embed_dim)
             tgt_images = batch['tgt'].to(device)           # (batch_size, max_tgt_length, C, H, W)
 
             optimizer.zero_grad()
 
             # Forward pass
-            loss = model(src, tgt_images=tgt_images)       # Returns loss
+            reconstructed_images = model(src, tgt_images=tgt_images)
+
+            loss = criterion(reconstructed_images, tgt_images)
 
             # Backward pass and optimization
             loss.backward()
@@ -150,6 +197,16 @@ def train(args):
 
             epoch_loss += loss.item()
             progress_bar.set_postfix_str(f'Loss: {loss.item():.4f}')
+
+            # Save sample every 500 batches
+            if total_batch % 50 == 0:
+                save_batch_sample(
+                    checkpoint_dir=args.checkpoint_dir,
+                    epoch=epoch,
+                    total_batch=total_batch,
+                    prompts=batch["prompt"],
+                    tgt_images=tgt_images
+                )
 
         avg_train_loss = epoch_loss / len(train_loader)
         print(f"Epoch {epoch} Training Loss: {avg_train_loss:.4f}")
@@ -208,7 +265,7 @@ def main():
     parser.add_argument('--dim_feedforward', type=int, default=2048, help='Dimension of feedforward network')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Maximum gradient norm for clipping')
-    parser.add_argument('--max_output_length', type=int, default=300, help='Maximum length of output image sequences')
+    parser.add_argument('--max_output_length', type=int, default=150, help='Maximum length of output image sequences')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--ignore_checkpoint', action='store_true', default=False,

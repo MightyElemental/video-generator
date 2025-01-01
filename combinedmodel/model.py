@@ -2,7 +2,6 @@ import math
 from typing import Optional
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 # ==========================
@@ -236,10 +235,7 @@ class TransformerVAEModel(nn.Module):
         # Reconstruct images from latents
         reconstructed_images = self.vae.decode(out)  # (batch_size, tgt_seq_length, C, H, W)
 
-        # Compute loss (e.g., MSE between reconstructed and target images)
-        loss = F.mse_loss(reconstructed_images, tgt_images)
-
-        return loss
+        return reconstructed_images
 
     def _infer(self, batch_size: int, memory: torch.Tensor) -> torch.Tensor:
         """
