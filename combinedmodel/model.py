@@ -192,8 +192,8 @@ class TransformerVAEModel(nn.Module):
         )
 
         # Positional encodings
-        self.pos_encoder = PositionalEncoding(embed_dim, dropout, max_seq_length)
-        self.pos_decoder = PositionalEncoding(embed_dim, dropout, max_output_length)
+        self.pos_encoder = PositionalEncoding(embed_dim, dropout)
+        self.pos_decoder = PositionalEncoding(embed_dim, dropout)
 
         # Learned start token
         self.start_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -221,7 +221,7 @@ class TransformerVAEModel(nn.Module):
 
         # Prepend start token
         start_tokens = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, embed_dim)
-        tgt_input = torch.cat([start_tokens, tgt_latents[:, :-1, :]], dim=1)  # (batch_size, tgt_seq_length, embed_dim)
+        tgt_input = torch.cat([start_tokens, tgt_latents], dim=1)  # (batch_size, tgt_seq_length, embed_dim)
 
         # Apply positional encoding
         tgt_embed = self.pos_decoder(tgt_input)
@@ -235,7 +235,7 @@ class TransformerVAEModel(nn.Module):
         # Reconstruct images from latents
         reconstructed_images = self.vae.decode(out)  # (batch_size, tgt_seq_length, C, H, W)
 
-        return reconstructed_images
+        return reconstructed_images[:, 1:, :, :, :]
 
     def _infer(self, batch_size: int, memory: torch.Tensor) -> torch.Tensor:
         """
