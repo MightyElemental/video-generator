@@ -229,7 +229,9 @@ def train(args):
                 src = batch['src'].to(device)
                 tgt_images = batch['tgt'].to(device)
 
-                loss = model(src, tgt_images=tgt_images)
+                reconstructed_images = model(src, tgt_images=tgt_images)
+
+                loss = criterion(reconstructed_images, tgt_images)
 
                 val_loss += loss.item()
                 progress_bar.set_postfix_str(f'Val Loss: {loss.item():.4f}')
