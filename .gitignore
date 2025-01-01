@@ -169,4 +169,5 @@ vae/output_images/
 text2vid/checkpoints/
 data/
 .vector_cache
-combinedmodel/data
+combinedmodel/data/
+combinedmodel/checkpoints/
