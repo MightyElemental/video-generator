@@ -1,6 +1,5 @@
 import os
 import random
-from typing import Optional, List
 import argparse
 import torch
 from torch.utils.data import DataLoader
@@ -26,22 +25,27 @@ def save_batch_sample(
     checkpoint_dir: str,
     epoch: int,
     total_batch: int,
-    prompts: Optional[List[str]],
-    tgt_images: torch.Tensor,
+    batch,
+    reconstructed_images: torch.Tensor,
 ):
     # Create samples directory
     samples_dir = os.path.join(checkpoint_dir, 'samples')  # Directory to save samples
     os.makedirs(samples_dir, exist_ok=True)
 
     # Create folder named "{epoch}-{total_batch}"
-    sample_folder = os.path.join(samples_dir, f"{epoch}-{total_batch}")
+    sample_folder = os.path.join(samples_dir, f"{epoch:03d}-{total_batch:05d}")
     os.makedirs(sample_folder, exist_ok=True)
+
+    tgt_images = batch["tgt"]
+    prompts = batch["prompt"]
+    videoID = batch["videoID"]
 
     # Save the first image sequence in the batch
     first_sequence = tgt_images[0]  # (max_tgt_length, C, H, W)
-    for i, img in enumerate(first_sequence):
+    created_seq    = reconstructed_images[0].to(first_sequence.device)
+    for i, (img, generated) in enumerate(zip(first_sequence, created_seq)):
         img_path = os.path.join(sample_folder, f"image_{i+1:04d}.png")
-        vutils.save_image(img, img_path)
+        vutils.save_image([img, generated], img_path, normalize=True)
 
     # Save the prompt
     if prompts:
@@ -52,6 +56,8 @@ def save_batch_sample(
     prompt_path = os.path.join(sample_folder, "prompt.txt")
     with open(prompt_path, 'w', encoding="utf-8") as f:
         f.write(prompt)
+        f.write("\n")
+        f.write(videoID[0])
 
 def train(args):
     # Set random seeds for reproducibility
@@ -169,13 +175,16 @@ def train(args):
 
     print("==> Starting training")
 
-    total_batch = 0
-
     for epoch in range(start_epoch + 1, args.epochs + 1):
         # == Training phase ==
+        total_batch = 0
         model.train()
         epoch_loss = 0.0
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [Train]")
+        progress_bar = tqdm(
+            train_loader,
+            desc=f"Epoch {epoch}/{args.epochs} [Train]",
+            smoothing=1,
+        )
 
         for batch in progress_bar:
             total_batch += 1
@@ -204,8 +213,8 @@ def train(args):
                     checkpoint_dir=args.checkpoint_dir,
                     epoch=epoch,
                     total_batch=total_batch,
-                    prompts=batch["prompt"],
-                    tgt_images=tgt_images
+                    batch=batch,
+                    reconstructed_images=reconstructed_images,
                 )
 
         avg_train_loss = epoch_loss / len(train_loader)
