@@ -4,7 +4,7 @@ from pickle import HIGHEST_PROTOCOL
 from typing import Optional, Callable, List
 import torch
 from torch.utils.data import Dataset
-from torchvision import transforms
+from torchvision.transforms import v2
 from PIL import Image
 
 from torchtext.vocab import GloVe
@@ -51,11 +51,12 @@ class VideoCaptionDataset(Dataset):
         self.frame_selection_fn = frame_selection_fn
 
         # Define image transformations
-        self.transform = transforms.Compose([
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],  # Recommended normalization
-                                 std=[0.229, 0.224, 0.225])
+        self.transform = v2.Compose([
+            v2.CenterCrop(image_size),
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=[0.485, 0.456, 0.406],  # Recommended normalization
+                         std=[0.229, 0.224, 0.225])
         ])
 
         # Process each entry in the JSON file
@@ -157,10 +158,11 @@ class VideoCaptionDataset(Dataset):
         return {
             'src': src,               # (max_src_length, embed_dim)
             'tgt': images,            # (max_output_length, C, H, W)
-            'prompt': text            # The prompt as a human-readable string
+            'prompt': text,           # The prompt as a human-readable string
+            'videoID': video_id       # The video ID so the output can be checked
         }
 
-def collate_fn(batch) -> dict[str, torch.Tensor]:
+def collate_fn(batch) -> dict[str, torch.Tensor | list[str]]:
     """
     Custom collate function to handle batches.
     Pads the source sequences to the maximum length in the batch.
@@ -169,6 +171,7 @@ def collate_fn(batch) -> dict[str, torch.Tensor]:
     src_batch = [item['src'] for item in batch]
     tgt_batch = [item['tgt'] for item in batch]
     prompt_batch = [item['prompt'] for item in batch]
+    video_ids = [item['videoID'] for item in batch]
 
     batch_size = len(src_batch)
     embed_dim = src_batch[0].size(1)
@@ -190,4 +193,5 @@ def collate_fn(batch) -> dict[str, torch.Tensor]:
         'tgt': tgt_padded,               # (batch_size, max_output_length, C, H, W)
         'src_lengths': src_lengths,
         'prompt': prompt_batch,
+        'videoID': video_ids,
     }
