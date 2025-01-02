@@ -7,10 +7,9 @@ import torch.nn.functional as F
 from model import TransformerVAEModel
 from tqdm import tqdm
 import numpy as np
-import torchvision.utils as vutils
 
 from video_cap_dataset import VideoCaptionDataset, collate_fn  # Ensure this is updated as per the new dataset class
-from utils import load_latest_checkpoint  # May not be needed since VAE and Transformer are trained together
+from utils import *
 
 def loss_function(recon_x, x, mu, logvar):
     """
@@ -20,44 +19,6 @@ def loss_function(recon_x, x, mu, logvar):
     # KL divergence between the learned latent distribution and standard normal
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
     return recon_loss + kl_loss
-
-def save_batch_sample(
-    checkpoint_dir: str,
-    epoch: int,
-    total_batch: int,
-    batch,
-    reconstructed_images: torch.Tensor,
-):
-    # Create samples directory
-    samples_dir = os.path.join(checkpoint_dir, 'samples')  # Directory to save samples
-    os.makedirs(samples_dir, exist_ok=True)
-
-    # Create folder named "{epoch}-{total_batch}"
-    sample_folder = os.path.join(samples_dir, f"{epoch:03d}-{total_batch:05d}")
-    os.makedirs(sample_folder, exist_ok=True)
-
-    tgt_images = batch["tgt"]
-    prompts = batch["prompt"]
-    videoID = batch["videoID"]
-
-    # Save the first image sequence in the batch
-    first_sequence = tgt_images[0]  # (max_tgt_length, C, H, W)
-    created_seq    = reconstructed_images[0].to(first_sequence.device)
-    for i, (img, generated) in enumerate(zip(first_sequence, created_seq)):
-        img_path = os.path.join(sample_folder, f"image_{i+1:04d}.png")
-        vutils.save_image([img, generated], img_path, normalize=True)
-
-    # Save the prompt
-    if prompts:
-        prompt = prompts[0]
-    else:
-        prompt = 'no_prompt_available'
-
-    prompt_path = os.path.join(sample_folder, "prompt.txt")
-    with open(prompt_path, 'w', encoding="utf-8") as f:
-        f.write(prompt)
-        f.write("\n")
-        f.write(videoID[0])
 
 def train(args):
     # Set random seeds for reproducibility
@@ -208,7 +169,7 @@ def train(args):
             progress_bar.set_postfix_str(f'Loss: {loss.item():.4f}')
 
             # Save sample every 500 batches
-            if total_batch % 50 == 0:
+            if total_batch % 250 == 0:
                 save_batch_sample(
                     checkpoint_dir=args.checkpoint_dir,
                     epoch=epoch,
