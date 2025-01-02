@@ -144,7 +144,7 @@ def train(args):
         progress_bar = tqdm(
             train_loader,
             desc=f"Epoch {epoch}/{args.epochs} [Train]",
-            smoothing=1,
+            smoothing=0.01,
         )
 
         for batch in progress_bar:
@@ -185,7 +185,11 @@ def train(args):
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            progress_bar = tqdm(val_loader, desc=f"Epoch {epoch}/{args.epochs} [Validation]")
+            progress_bar = tqdm(
+                val_loader,
+                desc=f"Epoch {epoch}/{args.epochs} [Validation]",
+                smoothing=0.01,
+            )
             for batch in progress_bar:
                 src = batch['src'].to(device)
                 tgt_images = batch['tgt'].to(device)
