@@ -56,6 +56,7 @@ def imgs_to_video(img_path: str, out_path: str, file_name: str):
     # Define the ffmpeg command
     command = [
         ffmpeg_path,
+        '-y', # overwrite existing file
         '-framerate', '15',
         '-i', path,
         '-c:v', 'libx264',
