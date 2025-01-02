@@ -4,18 +4,17 @@ channels:
     - nvidia
     - defaults
     - anaconda
-    - conda-forge
 dependencies:
     - python=3.10
     - tqdm
     - nvidia/label/cuda-12.4.1::libnvjpeg
-    - conda-forge::openssl
-    - numpy=1.26.4
+    - numpy<2.0.0
     - pytorch=2.5.1
-    - torchvision
+    - torchvision>=0.20
     - torchtext
     - pytorch-cuda=12.4
     - chardet
-    - timm
+    - pip
     - pyparsing
-    - pycocotools
+    - pip:
+        - pillow-simd
