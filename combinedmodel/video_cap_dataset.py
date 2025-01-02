@@ -52,6 +52,7 @@ class VideoCaptionDataset(Dataset):
 
         # Define image transformations
         self.transform = v2.Compose([
+            v2.Resize(image_size),
             v2.CenterCrop(image_size),
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
