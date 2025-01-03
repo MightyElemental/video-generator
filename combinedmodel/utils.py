@@ -3,17 +3,18 @@ import subprocess
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple
 import torch
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 import torchvision.utils as vutils
 
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 
 def load_latest_checkpoint(
     model: torch.nn.Module,
-    optimizer,
-    scheduler,
-    device: torch.device,
+    optimizer: Optional[Optimizer],
+    scheduler: Optional[LRScheduler],
     checkpoint_dir: str='checkpoints/'
-    ):
+) -> int:
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
         return 0  # No checkpoints exist
@@ -32,7 +33,7 @@ def load_latest_checkpoint(
     checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location=device)
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
     if model is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:

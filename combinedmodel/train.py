@@ -135,7 +135,12 @@ def train(args):
     start_epoch = 0
     if not args.ignore_checkpoint:
         print("==> Loading checkpoint")
-        start_epoch = load_latest_checkpoint(model, optimizer, device, args.checkpoint_dir)
+        start_epoch = load_latest_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            checkpoint_dir=args.checkpoint_dir
+        )
         print(f"Resuming from epoch {start_epoch}")
 
     print("==> Starting training")
