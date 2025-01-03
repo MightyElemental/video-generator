@@ -1,10 +1,11 @@
 import os
 import subprocess
 from tempfile import TemporaryDirectory
+from typing import Optional, Tuple
 import torch
 import torchvision.utils as vutils
 
-ffmpeg_path = "/usr/bin/ffmpeg"
+FFMPEG_PATH = "/usr/bin/ffmpeg"
 
 def load_latest_checkpoint(
     model: torch.nn.Module,
@@ -48,20 +49,54 @@ def _extract_epoch(f):
     except (IndexError, ValueError):
         return -1
 
-def imgs_to_video(img_path: str, out_path: str, file_name: str):
+def save_images_to_folder(
+    generated_images: torch.Tensor,
+    folder: str,
+):
+    """
+    Saves generated images to a temporary directory.
+
+    Args:
+        generated_images (torch.Tensor): Tensor of generated images with shape (1, sequence_length, 3, H, W).
+
+    Returns:
+        str: Path to the temporary directory containing the saved images.
+    """
+
+    # Denormalize images if necessary (assuming images are in range [-1, 1])
+    images = generated_images.squeeze(0)  # Shape: (sequence_length, 3, H, W)
+    images = (images + 1) / 2  # Scale to [0, 1]
+
+    for idx, img_tensor in enumerate(images, start=1):
+        img_path = os.path.join(folder, f"image_{idx:04d}.png")
+        vutils.save_image(img_tensor, img_path, normalize=False)
+
+def imgs_to_video(
+    img_path: str,
+    out_path: str,
+    file_name: Optional[str] = None,
+    resize: Tuple[int, int] = (1024, 512),
+    fps: int | str = 15
+):
     # Change to the specified working directory
     path = os.path.join(img_path, "image_%04d.png")
-    output = os.path.join(out_path, f"{file_name}.mp4")
+    if file_name:
+        output = os.path.join(out_path, f"{file_name}.mp4")
+    else:
+        output = out_path
+
+    if not os.path.isfile(FFMPEG_PATH):
+        raise FileNotFoundError(f"ffmpeg not found at '{FFMPEG_PATH}'. Please install ffmpeg or update the FFMPEG_PATH.")
 
     # Define the ffmpeg command
     command = [
-        ffmpeg_path,
+        FFMPEG_PATH,
         '-y', # overwrite existing file
-        '-framerate', '15',
+        '-framerate', str(fps),
         '-i', path,
         '-c:v', 'libx264',
         '-pix_fmt', 'yuv420p',
-        '-s', '1024x512',
+        '-s', f'{resize[0]}x{resize[1]}',
         output
     ]
 
@@ -69,7 +104,7 @@ def imgs_to_video(img_path: str, out_path: str, file_name: str):
     try:
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
-        print("An error occurred:", e)
+        print("An error occurred while creating the video:", e.stderr.decode())
 
 def save_batch_sample(
     checkpoint_dir: str,
