@@ -1,7 +1,9 @@
 import math
-from typing import Optional
+from typing import Optional, Tuple
 import torch
+from torch import Tensor
 import torch.nn as nn
+from tqdm import tqdm
 
 
 # ==========================
@@ -42,7 +44,7 @@ class Encoder(nn.Module):
         self.fc_mu = nn.Linear(self.flatten_size, latent_dim)
         self.fc_logvar = nn.Linear(self.flatten_size, latent_dim)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         # print("encoder:",x.shape)
         x = self.enc_layers(x)
         # print(x.shape)
@@ -106,7 +108,7 @@ class Decoder(nn.Module):
 
         self.deconv_layers = nn.Sequential(*layers)
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+    def forward(self, z: Tensor) -> Tensor:
         # (batch, seq_len, latent_dim)
         B, S, _ = z.shape
         # print("decoder:", z.shape)
@@ -131,7 +133,11 @@ class VAE(nn.Module):
         self.encoder = Encoder(latent_dim, hidden_dims, dropout)
         self.decoder = Decoder(latent_dim, hidden_dims, dropout)
 
-    def encode(self, x):
+    def encode_reparam(self, x: Tensor) -> Tensor:
+        mu, logvar = self.encode(x)
+        return self.reparameterize(mu, logvar)
+
+    def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         mu, logvar = self.encoder(x)
         return mu, logvar
 
@@ -200,11 +206,25 @@ class TransformerVAEModel(nn.Module):
 
     def generate_square_subsequent_mask(self, sz):
         """Generates an upper-triangular matrix of -inf, with zeros on diag."""
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        return self.transformer.generate_square_subsequent_mask(sz)
 
-    def _train_step(self, batch_size: int, memory: torch.Tensor, tgt_images: torch.Tensor) -> torch.Tensor:
+    def generate_src_key_padding_mask(self, src: Tensor) -> Tensor:
+        """
+        Generate a source key padding mask where positions with all zero embeddings are considered padding.
+
+        Args:
+            src (torch.Tensor): Tensor of shape (batch_size, src_seq_length, embed_dim)
+
+        Returns:
+            torch.Tensor: Boolean mask of shape (batch_size, src_seq_length),
+                        where True indicates a padding position.
+        """
+        # Check if all elements in the embedding dimension are zero
+        # This results in a mask of shape (batch_size, src_seq_length)
+        src_key_padding_mask = torch.all(src == 0, dim=-1)
+        return src_key_padding_mask
+
+    def _train_step(self, batch_size: int, memory: Tensor, tgt_images: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Args:
             batch_size: the size of the batch
@@ -214,14 +234,14 @@ class TransformerVAEModel(nn.Module):
             loss: scalar tensor representing the loss
         """
         # Encode target images to latent vectors
-        flattened = tgt_images.view(-1, tgt_images.size(-3), tgt_images.size(-2), tgt_images.size(-1))  # (batch_size * tgt_seq_length, C, H, W)
+        flattened = tgt_images.view(-1, tgt_images.size(-3), tgt_images.size(-2), tgt_images.size(-1))  # (batch_size * tgt_seq_length, 3, H, W)
         mu, logvar = self.vae.encode(flattened)
         tgt_latents = self.vae.reparameterize(mu, logvar)  # (batch_size * tgt_seq_length, latent_dim)
         tgt_latents = tgt_latents.view(batch_size, -1, self.embed_dim)  # (batch_size, tgt_seq_length, latent_dim)
 
         # Prepend start token
         start_tokens = self.start_token.expand(batch_size, 1, -1)  # (batch_size, 1, embed_dim)
-        tgt_input = torch.cat([start_tokens, tgt_latents], dim=1)  # (batch_size, tgt_seq_length, embed_dim)
+        tgt_input = torch.cat([start_tokens, tgt_latents[:, :-1, :]], dim=1)  # (batch_size, tgt_seq_length, embed_dim)
 
         # Apply positional encoding
         tgt_embed = self.pos_decoder(tgt_input)
@@ -233,11 +253,11 @@ class TransformerVAEModel(nn.Module):
         out = self.transformer.decoder(tgt_embed, memory, tgt_mask=tgt_mask)  # (batch_size, tgt_seq_length, embed_dim)
 
         # Reconstruct images from latents
-        reconstructed_images = self.vae.decode(out)  # (batch_size, tgt_seq_length, C, H, W)
+        reconstructed_images = self.vae.decode(out)  # (batch_size, tgt_seq_length, 3, H, W)
 
-        return reconstructed_images[:, 1:, :, :, :]
+        return reconstructed_images, mu, logvar
 
-    def _infer(self, batch_size: int, memory: torch.Tensor) -> torch.Tensor:
+    def _infer(self, batch_size: int, memory: Tensor) -> Tensor:
         """
         Args:
             batch_size: the size of the batch
@@ -245,47 +265,57 @@ class TransformerVAEModel(nn.Module):
         Returns:
             generated_images: (batch_size, tgt_seq_length, C, H, W)
         """
-        generated_latents = []
+
+        # the list of generated images
+        generated_output = []
 
         # Initialize with start token
         current_input = self.start_token.expand(batch_size, 1, -1).to(memory.device)  # (batch_size, 1, embed_dim)
 
-        for _ in range(self.max_output_length):
+        for _ in tqdm(range(self.max_output_length)):
             tgt_embed = self.pos_decoder(current_input)  # (batch_size, current_length, embed_dim)
 
+            # Decode
             out = self.transformer.decoder(tgt_embed, memory)  # (batch_size, current_length, embed_dim)
-            next_latent = out[:, -1:, :]  # (batch_size, 1, embed_dim)
-            generated_latents.append(next_latent)
+
+            next_input = out[:, -1:, :]  # (batch_size, 1, embed_dim)
+            # Convert latent vector into image
+            next_input = self.vae.decode(next_input) # (batch_size, 1, 3, H, W)
+
+            # Stash the generated image
+            generated_output.append(next_input) # (batch_size, 1, 3, H, W)
+
+            # Convert output to input vector
+            flattened = next_input.view(-1, 3, next_input.size(-2), next_input.size(-1))  # (batch_size * current_length, 3, H, W)
+            next_input = self.vae.encode_reparam(flattened) # (batch_size * current_length, embed_dim)
+            next_input = next_input.view(batch_size, -1, self.embed_dim)  # (batch_size, current_length, latent_dim)
 
             # Append the generated latent for the next step
-            current_input = torch.cat([current_input, next_latent], dim=1)  # Increment sequence length
+            current_input = torch.cat([current_input, next_input], dim=1)  # Increment sequence length
 
         # Concatenate all generated latents
-        generated_latents = torch.cat(generated_latents, dim=1)  # (batch_size, max_output_length, embed_dim)
+        generated_output = torch.cat(generated_output, dim=1)  # (batch_size, max_output_length, 3, H, W)
 
-        # Decode to images
-        generated_latents_flat = generated_latents.view(-1, self.embed_dim)  # (batch_size * max_output_length, embed_dim)
-        generated_images = self.vae.decode(generated_latents_flat)  # (batch_size * max_output_length, C, H, W)
-        generated_images = generated_images.view(batch_size, self.max_output_length, *generated_images.shape[1:])  # (batch_size, max_output_length, C, H, W)
+        return generated_output
 
-        return generated_images
-
-    def forward(self, src, src_mask=None, tgt_images=None) -> torch.Tensor:
+    def forward(self, src: Tensor, tgt_images: Optional[Tensor]=None) -> Tuple[Tensor, Tensor, Tensor] | Tensor:
         """
         Args:
             src: (batch_size, src_seq_length, embed_dim)
-            tgt_images: (batch_size, tgt_seq_length, C, H, W)
+            tgt_images: (batch_size, tgt_seq_length, 3, H, W)
         Returns:
             If tgt_images is provided, returns the training loss.
             If not, returns generated_images.
         """
         batch_size, _, _ = src.size()
 
+        src_key_padding_mask = self.generate_src_key_padding_mask(src)
+
         # Apply positional encoding to the source
         src = self.pos_encoder(src)
 
         # Encode the source sequence
-        memory = self.transformer.encoder(src, src_key_padding_mask=src_mask)  # (batch_size, src_seq_length, embed_dim)
+        memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask)  # (batch_size, src_seq_length, embed_dim)
 
         if tgt_images is not None:
             # Training phase

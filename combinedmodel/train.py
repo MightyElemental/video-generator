@@ -2,6 +2,7 @@ import os
 import random
 import argparse
 import torch
+from torch import Tensor
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from model import TransformerVAEModel
@@ -11,14 +12,20 @@ import numpy as np
 from video_cap_dataset import VideoCaptionDataset, collate_fn  # Ensure this is updated as per the new dataset class
 from utils import *
 
-def loss_function(recon_x, x, mu, logvar):
+def loss_function(
+    recon_x: Tensor,
+    true_x: Tensor,
+    mu: Tensor,
+    logvar: Tensor,
+    beta: float = 1.0
+) -> Tensor:
     """
     Computes the VAE loss as reconstruction loss + KL divergence.
     """
-    recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.size(0)  # Mean over batch
+    recon_loss = F.mse_loss(recon_x, true_x, reduction='sum') / true_x.size(0)  # Mean over batch
     # KL divergence between the learned latent distribution and standard normal
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
-    return recon_loss + kl_loss
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / true_x.size(0)
+    return recon_loss + beta * kl_loss
 
 def train(args):
     # Set random seeds for reproducibility
@@ -99,9 +106,6 @@ def train(args):
 
     print("==> Initializing optimizer and scheduler")
 
-    # Define loss function
-    criterion = torch.nn.MSELoss()
-
     # Define optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
@@ -156,9 +160,9 @@ def train(args):
             optimizer.zero_grad()
 
             # Forward pass
-            reconstructed_images = model(src, tgt_images=tgt_images)
+            reconstructed_images, mu, logvar = model(src, tgt_images=tgt_images)
 
-            loss = criterion(reconstructed_images, tgt_images)
+            loss = loss_function(reconstructed_images, tgt_images, mu, logvar)
 
             # Backward pass and optimization
             loss.backward()
@@ -194,9 +198,9 @@ def train(args):
                 src = batch['src'].to(device)
                 tgt_images = batch['tgt'].to(device)
 
-                reconstructed_images = model(src, tgt_images=tgt_images)
+                reconstructed_images, mu, logvar = model(src, tgt_images=tgt_images)
 
-                loss = criterion(reconstructed_images, tgt_images)
+                loss = loss_function(reconstructed_images, tgt_images, mu, logvar)
 
                 val_loss += loss.item()
                 progress_bar.set_postfix_str(f'Val Loss: {loss.item():.4f}')
