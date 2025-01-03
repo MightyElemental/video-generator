@@ -1,315 +1,201 @@
-import os
-import tempfile
-import subprocess
-import torch
-import torchvision.utils as vutils
-from torchvision.transforms import v2
-from torchtext.vocab import Vectors, GloVe
-from torchtext.data.utils import get_tokenizer
-from text2vid.model import TransformerVectorGenerator
-from vae.vae_model import VAE
+# generate.py
 
-def load_transformer_model(checkpoint_path: str, device: torch.device, **kwargs) -> TransformerVectorGenerator:
+import os
+import torch
+import torch.nn as nn
+from typing import Optional
+from torchtext.vocab import GloVe
+from torchtext.data.utils import get_tokenizer
+from PIL import Image
+from tempfile import TemporaryDirectory
+
+from combinedmodel.model import TransformerVAEModel
+from combinedmodel.utils import load_latest_checkpoint, save_images_to_folder, imgs_to_video
+
+# Define the path to ffmpeg. Modify this if ffmpeg is located elsewhere.
+FFMPEG_PATH = "/usr/bin/ffmpeg"
+
+def load_model(
+    model_checkpoint: Optional[str] = None,
+    checkpoint_dir: str = 'combinedmodel/checkpoints/',
+    device: Optional[torch.device] = None
+) -> TransformerVAEModel:
     """
-    Loads the TransformerVectorGenerator model from a checkpoint.
+    Loads the TransformerVAEModel from a checkpoint.
 
     Args:
-        checkpoint_path (str): Path to the transformer model checkpoint.
-        device (torch.device): Device to load the model onto.
-        **kwargs: Additional keyword arguments for TransformerVectorGenerator.
+        model_checkpoint (Optional[str]): Path to the model checkpoint. If None, the latest checkpoint in
+                                         checkpoint_dir is loaded.
+        checkpoint_dir (str): Directory where checkpoints are stored.
+        device (Optional[torch.device]): Device to load the model on. If None, automatically selects CUDA or CPU.
 
     Returns:
-        TransformerVectorGenerator: The loaded transformer model in evaluation mode.
+        TransformerVAEModel: The loaded model.
     """
-    model = TransformerVectorGenerator(**kwargs).to(device)
-    state_dict = torch.load(
-        checkpoint_path,
-        map_location=device,
-        weights_only=False
-    )["model_state_dict"]
-    model.load_state_dict(state_dict)
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Initialize the model with the same hyperparameters as used during training
+    model = TransformerVAEModel(
+        embed_dim=300,            # Must match train_dataset.embed_dim
+        latent_dim=300,           # Must match train.py
+        nhead=6,                  # Must match args.nhead in training
+        num_encoder_layers=6,     # Must match args.num_encoder_layers in training
+        num_decoder_layers=6,     # Must match args.num_decoder_layers in training
+        dim_feedforward=2048,     # Must match args.dim_feedforward in training
+        dropout=0.1,              # Must match args.dropout in training
+        max_seq_length=64,        # Must match train_dataset.max_src_length in training
+        max_output_length=300,    # Can be set to desired sequence_length
+        hidden_vae_dims=[32, 64, 128, 256, 512]  # Must match hidden_vae_dims in training
+    )
+    
+    model.to(device)
+
+    if model_checkpoint is None:
+        # Load the latest checkpoint from checkpoint_dir
+        epoch = load_latest_checkpoint(model, optimizer=None, scheduler=None, device=device, checkpoint_dir=checkpoint_dir)
+        print(f"Loaded model from the latest checkpoint at epoch {epoch}.")
+    else:
+        # Load the specified checkpoint
+        if not os.path.isfile(model_checkpoint):
+            raise FileNotFoundError(f"Checkpoint file '{model_checkpoint}' does not exist.")
+        checkpoint = torch.load(model_checkpoint, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded model from checkpoint '{model_checkpoint}'.")
+    
     model.eval()
     return model
 
-def load_vae_model(checkpoint_path: str, device: torch.device, img_size: int, latent_dim: int, multiplier: int =1) -> VAE:
+def prepare_input_text(
+    input_text: str,
+    max_src_length: int = 64,
+    embed_dim: int = 300,
+    device: Optional[torch.device] = None
+) -> torch.Tensor:
     """
-    Loads the VAE model from a checkpoint.
+    Tokenizes and embeds the input text to create the source tensor.
 
     Args:
-        checkpoint_path (str): Path to the VAE model checkpoint.
-        device (torch.device): Device to load the model onto.
-        img_size (int): Image size used in the VAE.
-        latent_dim (int): Dimension of the latent space.
-        multiplier (int, optional): Multiplier for the VAE channels. Defaults to 1.
+        input_text (str): The text prompt to be used in the transformer encoder.
+        max_src_length (int): Maximum number of tokens for the input text.
+        embed_dim (int): Dimension of the GloVe vectors.
+        device (Optional[torch.device]): Device to create the tensor on. If None, automatically selects CUDA or CPU.
 
     Returns:
-        VAE: The loaded VAE model in evaluation mode.
+        torch.Tensor: Embedded and padded source tensor of shape (1, max_src_length, embed_dim).
     """
-    vae = VAE(img_size=img_size, latent_dim=latent_dim, multiplier=multiplier).to(device)
-    state_dict = torch.load(
-        checkpoint_path,
-        map_location=device,
-        weights_only=False
-    )["model_state_dict"]
-    vae.load_state_dict(state_dict)
-    vae.eval()
-    return vae
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def tokenize_and_embed(
-    text: str,
-    tokenizer,
-    embedder: Vectors,
-    device: torch.device,
-    max_length: int = 64
-    ) -> torch.Tensor:
-    """
-    Tokenizes and embeds the input text.
-
-    Args:
-        text (str): The input text to tokenize and embed.
-        tokenizer (function): tokenizer function.
-        embedder (Vectors): Pre-trained embeddings.
-        device (torch.device): Device to perform computations on.
-        max_length (int): Maximum token length. Defaults to 64.
-
-    Returns:
-        torch.Tensor: The embedded text tensor of shape (1, <=max_length, embed_dim).
-    """
-    tokens: list[str] = tokenizer(text)
-    tokens_tensor = embedder.get_vecs_by_tokens(tokens[:max_length]).to(device)
-
-    return tokens_tensor.unsqueeze(0)
-
-def generate_vectors(transformer_model: TransformerVectorGenerator, src: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generates output vectors and stop logits using the transformer model.
-
-    Args:
-        transformer_model (TransformerVectorGenerator): The transformer model.
-        src (torch.Tensor): Source tensor of shape (1, max_length, embed_dim).
-        device (torch.device): Device to perform computations on.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Output vectors of shape (seq_length, vector_dim) and stop logits of shape (seq_length,).
-    """
-    with torch.no_grad():
-        output_vectors, stop_logits = transformer_model(src.to(device), tgt=None)
-        # TODO: Trim last vector (stop vector)
-        # output_vectors: (1, seq_length, vector_dim)
-        # stop_logits: (1, seq_length)
-    return output_vectors.squeeze(0), stop_logits.squeeze(0)
-
-def truncate_vectors(vectors: torch.Tensor, stop_logits: torch.Tensor) -> torch.Tensor:
-    """
-    Truncates the vectors sequence up to the first stop token.
-
-    Args:
-        vectors (torch.Tensor): Output vectors of shape (seq_length, vector_dim).
-        stop_logits (torch.Tensor): Stop logits of shape (seq_length,).
-
-    Returns:
-        torch.Tensor: Truncated vectors of shape (truncated_seq_length, vector_dim).
-    """
-    stop_probs = torch.sigmoid(stop_logits)  # (seq_length,)
-    stop_indices = (stop_probs > 0.5).nonzero(as_tuple=True)[0]
-
-    if stop_indices.numel() > 0:
-        first_stop_index = stop_indices[0].item()
-        truncated_vectors = vectors[:first_stop_index + 1]  # Include the stop vector
-    else:
-        truncated_vectors = vectors  # No stop token found
-
-    return truncated_vectors
+    tokenizer = get_tokenizer('basic_english')
+    vocab = GloVe(name='840B', dim=embed_dim)
+    
+    tokens = tokenizer(input_text)
+    tokens = tokens[:max_src_length]
+    
+    token_vectors = vocab.get_vecs_by_tokens(tokens)
+    
+    src = torch.zeros(max_src_length, embed_dim)
+    src[:token_vectors.size(0), :] = token_vectors[:max_src_length]
+    
+    src = src.unsqueeze(0).to(device)  # Shape: (1, max_src_length, embed_dim)
+    return src
 
 def generate_images(
-    vae_model: VAE,
-    vectors: torch.Tensor,
-    device: torch.device,
-    image_dir: str,
-    batch_size: int = 32
-    ) -> list:
+    model: TransformerVAEModel,
+    src: torch.Tensor,
+    device: Optional[torch.device] = None,
+    sequence_length: int = 300
+) -> torch.Tensor:
     """
-    Generates images from vectors using the VAE's decoder.
+    Generates a sequence of images from the input source tensor using the model.
 
     Args:
-        vae_model (VAE): The VAE model.
-        vectors (torch.Tensor): Truncated vectors of shape (seq_length, vector_dim).
-        device (torch.device): Device to perform computations on.
-        image_dir (str): Directory to save the generated images.
-        batch_size (int): Number of vectors to process in a batch.
+        model (TransformerVAEModel): The loaded TransformerVAEModel.
+        src (torch.Tensor): The source tensor of shape (1, max_src_length, embed_dim).
+        device (Optional[torch.device]): Device to perform inference on. If None, automatically selects CUDA or CPU.
+        sequence_length (int): The desired length of the video.
 
     Returns:
-        list: List of image file paths.
+        torch.Tensor: Generated images tensor of shape (1, sequence_length, 3, H, W).
     """
-    os.makedirs(image_dir, exist_ok=True)
-    images = []
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    transform = v2.Normalize(
-        mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-        std=[1/0.229, 1/0.224, 1/0.255]
-    )
+    model.max_output_length = sequence_length
+    model.to(device)
+    src = src.to(device)
 
     with torch.no_grad():
-        for start in range(0, vectors.size(0), batch_size):
-            end = start + batch_size
-            batch_vectors = vectors[start:end].to(device)  # (batch_size, vector_dim)
-            reconstructed = vae_model.decode(batch_vectors)  # (batch_size, channels, H, W)
+        with torch.autocast(device_type=device.type, dtype=torch.float16):
+            generated_images = model(src)  # Shape: (1, sequence_length, 3, H, W)
+    
+    return generated_images
 
-            # Apply transforms
-            transformed_images = transform(reconstructed)
-
-            for i, image_array in enumerate(transformed_images):
-                image_path = os.path.join(image_dir, f'image_{start + i:05d}.png')
-                vutils.save_image(image_array, image_path, normalize=True)
-                images.append(image_path)
-
-    return images
-
-def compile_images_to_video(image_dir: str, output_video_path: str, fps: int = 30):
+def text_to_video(
+    input_text: str,
+    model_checkpoint: Optional[str] = None,
+    output_video_path: str = './output_video.mp4',
+    sequence_length: int = 300,
+    fps: int = 15
+) -> None:
     """
-    Compiles a sequence of images into an MP4 video using ffmpeg.
+    Generates a video sequence from a text prompt and saves it to the specified path.
 
     Args:
-        image_dir (str): Directory containing the image sequence.
-        output_video_path (str): Path to save the compiled video.
-        fps (int, optional): Frames per second for the video. Defaults to 24.
-    """
-    # Ensure ffmpeg is installed
-    try:
-        subprocess.check_output(['ffmpeg', '-version'])
-    except subprocess.CalledProcessError:
-        raise RuntimeError('ffmpeg is not installed. Please install it and try again.')
+        input_text (str): The text prompt to be used in the transformer encoder.
+        model_checkpoint (Optional[str]): The path to the model checkpoint to use.
+                                          If None, the latest checkpoint in './checkpoints' is used.
+        output_video_path (str): The path where the output video will be saved.
+        sequence_length (int): The desired length of the video (number of frames). Default is 300.
+        fps (int): Frames per second for the output video. Default is 15.
 
-    input_pattern = os.path.join(image_dir, 'image_%05d.png')
-    # TODO: Add libx264
-    command = [
-        'ffmpeg',
-        '-y',  # Overwrite output file if it exists
-        '-framerate', str(fps),
-        '-i', input_pattern,
-        '-pix_fmt', 'yuv420p',
-        output_video_path
-    ]
-
-    try:
-        subprocess.run(command, check=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError("ffmpeg failed to generate video") from e
-
-def text_to_video(input_text: str,
-                  transformer_checkpoint: str,
-                  vae_checkpoint: str,
-                  output_video_path: str,
-                  embed_dim: int = 300,
-                  max_src_length: int = 64,
-                  max_output_length: int = 500,
-                  transformer_params: dict | None = None,
-                  vae_params: dict | None = None,
-                  fps: int = 30):
-    """
-    Generates a video from input text by using a transformer model to generate a sequence of vectors,
-    converting each vector to an image using a VAE decoder, and compiling the images into an MP4 video.
-
-    Args:
-        input_text (str): The text input to generate the video from.
-        transformer_checkpoint (str): Path to the transformer model checkpoint.
-        vae_checkpoint (str): Path to the VAE model checkpoint.
-        output_video_path (str): Path to save the generated MP4 video.
-        embed_dim (int, optional): Dimension of the embeddings. Defaults to 300.
-        max_src_length (int, optional): Maximum token length for the input text. Defaults to 64.
-        max_output_length (int, optional): Maximum number of vectors to generate. Defaults to 500.
-        transformer_params (dict, optional): Additional parameters for the transformer model. Defaults to None.
-        vae_params (dict, optional): Additional parameters for the VAE model. Defaults to None.
-        fps (int, optional): Frames per second for the output video. Defaults to 24.
+    Raises:
+        Exception: If any step in the generation process fails.
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
 
-    print("==> Loading tokenizer / embedder")
+    print("Loading model...")
+    model = load_model(model_checkpoint=model_checkpoint, device=device)
+    
+    print("Preparing input text...")
+    src = prepare_input_text(input_text, max_src_length=64, embed_dim=300, device=device)
+    
+    print("Generating images...")
+    generated_images = generate_images(model, src, device=device, sequence_length=sequence_length)
+    
+    with TemporaryDirectory() as tmpdir:
+        print("Saving images to temporary directory...")
+        save_images_to_folder(generated_images, tmpdir)
 
-    # Load tokenizer and embedder
-    tokenizer = get_tokenizer('basic_english')
-    embedder = GloVe(name='840B', dim=embed_dim)
+        print("Creating video from images...")
+        imgs_to_video(tmpdir, output_video_path, resize=(512, 512), fps=fps)
+    
+if __name__ == '__main__':
+    import argparse
 
-    # Load transformer model
-    if transformer_params is None:
-        # These should match the training configuration
-        transformer_params = {
-            'embed_dim': embed_dim,
-            'vector_dim': 200,
-            'nhead': 6,
-            'num_encoder_layers': 6,
-            'num_decoder_layers': 6,
-            'dim_feedforward': 2048,
-            'max_seq_length': max_src_length,
-            'max_output_length': max_output_length
-        }
-
-    transformer_model = load_transformer_model(
-        checkpoint_path=transformer_checkpoint,
-        device=device,
-        **transformer_params
-    )
-
-    # Load VAE model
-    if vae_params is None:
-        # These should match the training configuration
-        vae_params = {
-            'img_size': 256,
-            'latent_dim': 200,
-            'multiplier': 3
-        }
-
-    print("==> Loading VAE model")
-
-    vae_model = load_vae_model(
-        checkpoint_path=vae_checkpoint,
-        device=device,
-        **vae_params
-    )
-
-    print("==> Loading Transformer model")
-
-    # Tokenize and embed input text
-    src = tokenize_and_embed(
-        text=input_text,
-        tokenizer=tokenizer,
-        embedder=embedder,
-        device=device,
-        max_length=max_src_length
-    )  # (1, max_length, embed_dim)
-
-    print("==> Generating frame vectors")
-
-    # Generate vectors using transformer
-    output_vectors, stop_logits = generate_vectors(
-        transformer_model,
-        src,
-        device
-    )  # (seq_length, vector_dim), (seq_length, )
-
-    # Truncate vectors at the first stop token
-    truncated_vectors = truncate_vectors(
-        output_vectors,
-        stop_logits
-    )  # (truncated_seq_length, vector_dim)
-
-    # Generate images from vectors
-    with tempfile.TemporaryDirectory() as tmpdir:
-        print("==> Generating frame images")
-        generate_images(
-            vae_model,
-            truncated_vectors,
-            device,
-            tmpdir
-        )
-
-        print("==> Compiling video")
-
-        # Compile images to video
-        compile_images_to_video(
-            image_dir=tmpdir,
-            output_video_path=output_video_path,
-            fps=fps
-        )
-
-    print(f"==> Video successfully saved to {output_video_path}")
+    def main():
+        parser = argparse.ArgumentParser(description="Generate a video sequence from a text prompt using a Transformer VAE model.")
+        
+        parser.add_argument('--input_text', type=str, required=True, help='The text prompt to generate the video.')
+        parser.add_argument('--model_checkpoint', type=str, default=None, help='Path to the model checkpoint. If not provided, the latest checkpoint in ./checkpoints is used.')
+        parser.add_argument('--output_video_path', type=str, default='./output_video.mp4', help='Path to save the generated video.')
+        parser.add_argument('--sequence_length', type=int, default=150, help='Number of frames in the generated video.')
+        parser.add_argument('--fps', type=int, default=15, help='Frames per second for the output video.')
+        
+        args = parser.parse_args()
+        
+        try:
+            text_to_video(
+                input_text=args.input_text,
+                model_checkpoint=args.model_checkpoint,
+                output_video_path=args.output_video_path,
+                sequence_length=args.sequence_length,
+                fps=args.fps
+            )
+        except Exception as e:
+            print(f"An error occurred during video generation: {e}")
+            exit(1)
+    
+    main()
