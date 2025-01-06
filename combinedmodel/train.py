@@ -108,29 +108,35 @@ def train(args):
     print("==> Initializing optimizer and scheduler")
 
     # Define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # Optionally, separate learning rates for VAE and Transformer
-    if args.use_separate_lrs:
-        transformer_params = []
-        vae_params = []
-        for name, param in model.named_parameters():
-            if 'vae.encoder' in name or 'vae.decoder' in name:
-                vae_params.append(param)
-            else:
-                transformer_params.append(param)
-        optimizer = torch.optim.Adam([
-            {'params': transformer_params, 'lr': args.lr},
-            {'params': vae_params, 'lr': args.lr * args.vae_lr_multiplier}
-        ], weight_decay=args.weight_decay)
-        print(f"Using separate learning rates: Transformer LR={args.lr}, VAE LR={args.lr * args.vae_lr_multiplier}")
 
     # Define a learning rate scheduler that reduces LR on plateau
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=args.scheduler_patience,
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer,
+    #     mode='min',
+    #     factor=0.5,
+    #     patience=args.scheduler_patience,
+    # )
+
+    scheduler_cos = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer=optimizer,
+        T_max=len(train_loader)*args.epochs,
+        # TODO: Add resume checkpoint
+    )
+
+    scheduler_lin = torch.optim.lr_scheduler.LinearLR(
+        optimizer=optimizer,
+        start_factor=1e-6,
+        end_factor=1.0,
+        total_iters=len(train_loader),
+        # TODO: Add resume checkpoint
+    )
+
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+        schedulers=[scheduler_lin, scheduler_cos],
+        optimizer=optimizer,
     )
 
     start_epoch = 0
@@ -238,7 +244,7 @@ def train(args):
             writer.add_image('Validation/Reconstructed_Images', img_grid, epoch)
 
         # Step the scheduler based on validation loss
-        scheduler.step(avg_val_loss)
+        scheduler.step()
 
         # Save the model checkpoint
         os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -268,8 +274,8 @@ def main():
     # Training parameters
     parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for Transformer')
-    parser.add_argument('--weight_decay', type=float, default=1e-5, help='Weight decay for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate for Transformer')
+    parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay for optimizer')
     parser.add_argument('--num_workers', type=int, default=6, help='Number of DataLoader workers')
     parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
     parser.add_argument('--num_encoder_layers', type=int, default=6, help='Number of encoder layers')
