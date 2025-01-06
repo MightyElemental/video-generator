@@ -6,6 +6,7 @@ import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 import torchvision.utils as vutils
+from torchvision.utils import make_grid
 
 FFMPEG_PATH = "/usr/bin/ffmpeg"
 
@@ -142,3 +143,12 @@ def save_batch_sample(
     prompt_path = os.path.join(sample_folder, "prompt.txt")
     with open(prompt_path, 'w', encoding="utf-8") as f:
         f.write(prompt)
+
+
+def make_image_grid(tensors, nrow=4):
+    """
+    Helper function to make a grid of images for TensorBoard visualization.
+    Assumes tensors are in (batch_size, C, H, W) format and in [0,1] range.
+    """
+    grid = make_grid(tensors.detach(), nrow=nrow, normalize=True)
+    return grid

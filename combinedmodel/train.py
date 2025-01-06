@@ -4,6 +4,7 @@ import argparse
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
 from model import TransformerVAEModel
 from tqdm import tqdm
@@ -42,7 +43,7 @@ def train(args):
 
     print("==> Loading dataset")
 
-    # select every other frame
+    # Select every other frame
     frame_selection_fn = lambda lis: lis[::2]
 
     # Initialize dataset
@@ -143,6 +144,10 @@ def train(args):
         )
         print(f"Resuming from epoch {start_epoch}")
 
+    print("==> Initializing TensorBoard SummaryWriter")
+    # Initialize TensorBoard SummaryWriter
+    writer = SummaryWriter(log_dir=os.path.join(args.checkpoint_dir, 'tensorboard_logs'))
+
     print("==> Starting training")
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
@@ -177,7 +182,11 @@ def train(args):
             epoch_loss += loss.item()
             progress_bar.set_postfix_str(f'Loss: {loss.item():.4f}')
 
-            # Save sample every 500 batches
+            # Log batch loss to TensorBoard
+            global_step = (epoch - 1) * len(train_loader) + total_batch
+            writer.add_scalar('Train/Batch_Loss', loss.item(), global_step)
+
+            # Save sample every 250 batches
             if total_batch % 250 == 0:
                 save_batch_sample(
                     checkpoint_dir=args.checkpoint_dir,
@@ -186,13 +195,21 @@ def train(args):
                     batch=batch,
                     reconstructed_images=reconstructed_images,
                 )
+                # Also log the reconstructed images to TensorBoard
+                # Select the first sample in the batch for visualization
+                img_grid = make_image_grid(reconstructed_images[0], nrow=15)
+                writer.add_image('Train/Reconstructed_Images', img_grid, global_step)
+                img_grid = make_image_grid(tgt_images[0], nrow=15)
+                writer.add_image('Train/Target_Images', img_grid, global_step)
 
         avg_train_loss = epoch_loss / len(train_loader)
         print(f"Epoch {epoch} Training Loss: {avg_train_loss:.4f}")
+        writer.add_scalar('Train/Epoch_Loss', avg_train_loss, epoch)
 
         # == Validation phase ==
         model.eval()
         val_loss = 0.0
+        reconstructed_images = None
         with torch.no_grad():
             progress_bar = tqdm(
                 val_loader,
@@ -212,6 +229,13 @@ def train(args):
 
         avg_val_loss = val_loss / len(val_loader)
         print(f"Epoch {epoch} Validation Loss: {avg_val_loss:.4f}")
+        writer.add_scalar('Validation/Loss', avg_val_loss, epoch)
+
+        # Log validation reconstructed images
+        if reconstructed_images is not None:
+            # Log the first batch's first reconstructed image
+            img_grid = make_image_grid(reconstructed_images[0], nrow=15)
+            writer.add_image('Validation/Reconstructed_Images', img_grid, epoch)
 
         # Step the scheduler based on validation loss
         scheduler.step(avg_val_loss)
@@ -226,6 +250,9 @@ def train(args):
             'scheduler_state_dict': scheduler.state_dict(),
         }, checkpoint_path)
         print(f"==> Saved checkpoint: {checkpoint_path}")
+
+    print("==> Training complete. Closing TensorBoard SummaryWriter.")
+    writer.close()
 
 def main():
     parser = argparse.ArgumentParser(description="Train Transformer VAE Model for Image Sequence Generation")
