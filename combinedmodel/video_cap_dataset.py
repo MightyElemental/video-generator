@@ -153,8 +153,7 @@ class VideoCaptionDataset(Dataset):
 
         # Initialize src tensor - pad with zeros
         src = torch.zeros(self.max_src_length, self.embed_dim)
-        token_vectors = self.vocab.get_vecs_by_tokens(tokens)
-        src[:token_vectors.size(0), :] = token_vectors
+        src = self.vocab.get_vecs_by_tokens(tokens)
 
         return {
             'src': src,               # (max_src_length, embed_dim)
@@ -174,12 +173,13 @@ def collate_fn(batch) -> dict[str, torch.Tensor | list[str]]:
     prompt_batch = [item['prompt'] for item in batch]
     video_ids = [item['videoID'] for item in batch]
 
+    # Find the maximum sequence length within the batch
     batch_size = len(src_batch)
     embed_dim = src_batch[0].size(1)
     # C, H, W = tgt_batch[0].size(1), tgt_batch[0].size(2), tgt_batch[0].size(3)
     max_src_length = max([src.size(0) for src in src_batch])
 
-    # Pad src sequences
+    # Pad src sequences to match the longest sequence in the batch
     src_padded = torch.zeros(batch_size, max_src_length, embed_dim)
     for i, src in enumerate(src_batch):
         src_padded[i, :src.size(0), :] = src
