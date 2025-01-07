@@ -130,7 +130,7 @@ def train(args):
         optimizer=optimizer,
         start_factor=1e-6,
         end_factor=1.0,
-        total_iters=len(train_loader),
+        total_iters=len(train_loader)*2,
         # TODO: Add resume checkpoint
     )
 
@@ -192,6 +192,9 @@ def train(args):
             global_step = (epoch - 1) * len(train_loader) + total_batch
             writer.add_scalar('Train/Batch_Loss', loss.item(), global_step)
 
+            scheduler.step()
+            writer.add_scalar('Train/Learning_Rate', scheduler.get_last_lr()[0], global_step)
+
             # Save sample every 250 batches
             if total_batch % 250 == 0:
                 save_batch_sample(
@@ -242,9 +245,6 @@ def train(args):
             # Log the first batch's first reconstructed image
             img_grid = make_image_grid(reconstructed_images[0], nrow=15)
             writer.add_image('Validation/Reconstructed_Images', img_grid, epoch)
-
-        # Step the scheduler based on validation loss
-        scheduler.step()
 
         # Save the model checkpoint
         os.makedirs(args.checkpoint_dir, exist_ok=True)
