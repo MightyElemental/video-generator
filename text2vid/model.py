@@ -1,6 +1,8 @@
 import math
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 class TransformerVectorGenerator(nn.Module):
     def __init__(
@@ -48,16 +50,14 @@ class TransformerVectorGenerator(nn.Module):
 
     def generate_square_subsequent_mask(self, sz):
         """Generates an upper-triangular matrix of -inf, with zeros on diag."""
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        return self.transformer.generate_square_subsequent_mask(sz)
 
     def _train_step(
         self,
         batch_size: int,
-        memory: torch.Tensor,
-        tgt: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
+        memory: Tensor,
+        tgt: Tensor
+        ) -> Tuple[Tensor, Tensor]:
         """
         Args:
             batch_size: the size of the batch
@@ -87,8 +87,8 @@ class TransformerVectorGenerator(nn.Module):
     def _infer(
         self,
         batch_size: int,
-        memory: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
+        memory: Tensor
+        ) -> Tuple[Tensor, Tensor]:
         """
         Args:
             batch_size: the size of the batch
@@ -127,7 +127,23 @@ class TransformerVectorGenerator(nn.Module):
         stop_logits = torch.cat(stop_flags, dim=1)
         return output_vectors, stop_logits
 
-    def forward(self, src, src_mask=None, tgt=None) -> tuple[torch.Tensor, torch.Tensor]:
+    def generate_src_key_padding_mask(self, src: Tensor) -> Tensor:
+        """
+        Generate a source key padding mask where positions with all zero embeddings are considered padding.
+
+        Args:
+            src (torch.Tensor): Tensor of shape (batch_size, src_seq_length, embed_dim)
+
+        Returns:
+            torch.Tensor: Boolean mask of shape (batch_size, src_seq_length),
+                        where True indicates a padding position.
+        """
+        # Check if all elements in the embedding dimension are zero
+        # This results in a mask of shape (batch_size, src_seq_length)
+        src_key_padding_mask = torch.all(src == 0, dim=-1)
+        return src_key_padding_mask
+
+    def forward(self, src, src_mask=None, tgt=None) -> Tuple[Tensor, Tensor]:
         """
         Args:
             src: (batch_size, src_seq_length, embed_dim)
@@ -138,11 +154,13 @@ class TransformerVectorGenerator(nn.Module):
         """
         batch_size, _, _ = src.size()
 
+        src_key_padding_mask = self.generate_src_key_padding_mask(src)
+
         # Apply positional encoding to the source
         src = self.pos_encoder(src)
 
         # Encode the source sequence (process the encoder once)
-        memory = self.transformer.encoder(src, mask=src_mask)
+        memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask)
 
         if tgt is not None:
             # During training, the target sequence is provided and masked
